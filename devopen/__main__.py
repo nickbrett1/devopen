@@ -24,7 +24,7 @@ from .opener import DevopenError, open_repo
 def _workspace_entries(workspaces_dir):
     """(label, origin_url) for every already-cloned workspace."""
     entries = []
-    for d in sorted(glob.glob(os.path.join(workspaces_dir, "*"))):
+    for d in sorted(glob.glob(os.path.join(workspaces_dir, "*")), key=lambda p: os.path.basename(p).lower()):
         if not (os.path.isdir(d) and os.path.isdir(os.path.join(d, ".git"))):
             continue
         url = d

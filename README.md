@@ -89,14 +89,18 @@ Pick a repo to open:
     [ 1] agy-telemetry
 
   Your GitHub repos:
-    [ 2] nickbrett1/devopen
-    [ 3] nickbrett1/stripe-toddler
+    [ 2] nickbrett1/agent-swarm
+    [ 3] nickbrett1/dagster-tutorial
+    [ 4] nickbrett1/data-science-on-gcp
     ...
 
     [ 0] Enter a repo URL
     [ q] Quit
 >
 ```
+
+Workspaces and GitHub repos are each sorted alphabetically (case-insensitive)
+so the list is easy to scan.
 
 ### From Blink on your iPhone
 

@@ -79,4 +79,6 @@ def list_repos(username="nickbrett1", limit=100):
         if name not in seen:
             seen.add(name)
             out.append(name)
+    # stable, scannable order for the picker
+    out.sort(key=str.lower)
     return out[:limit]

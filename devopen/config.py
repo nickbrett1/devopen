@@ -7,7 +7,7 @@ Config lives at ~/.devopen/config.json (mode 600):
       "install_dir":    "~/DevOpen/devopen",
       "workspaces_dir": "~/DevOpen/workspaces",
       "host":           "0.0.0.0",
-      "port":           8787
+      "port":           8797
     }
 """
 
@@ -16,7 +16,8 @@ import os
 import secrets
 
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 8787
+# NOTE: 8787 is used by VS Code's Code Helper process, so we use 8797.
+DEFAULT_PORT = 8797
 CONFIG_DIR_NAME = ".devopen"
 CONFIG_FILE_NAME = "config.json"
 

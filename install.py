@@ -22,7 +22,8 @@ import sys
 REPO_URL = "https://github.com/nickbrett1/devopen.git"
 PLIST_LABEL = "com.nick.devopen"
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 8787
+# NOTE: 8787 is used by VS Code's Code Helper process, so we use 8797.
+DEFAULT_PORT = 8797
 
 
 def sh(cmd, check=True):
@@ -39,6 +40,29 @@ def _write_json_600(path, data):
     os.replace(tmp, path)
 
 
+def _python_with_ssl():
+    """Return a python3 that can actually do HTTPS (import ssl works).
+
+    pyenv builds sometimes lack SSL support, which silently breaks pip.
+    """
+    candidates = [sys.executable, "/opt/homebrew/bin/python3", "/usr/bin/python3"]
+    seen = set()
+    for cand in candidates:
+        if not cand or cand in seen or not os.path.exists(cand):
+            continue
+        seen.add(cand)
+        try:
+            r = subprocess.run(
+                [cand, "-c", "import ssl"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0:
+                return cand
+        except Exception:
+            continue
+    return None
+
+
 def _install_script(src, dest):
     print(f"Installing {src} → {dest}")
     try:
@@ -47,6 +71,17 @@ def _install_script(src, dest):
     except PermissionError:
         print(f"⚠️  Cannot write {dest} (permissions). Run with sudo or copy manually:")
         print(f"    sudo cp {src} {dest} && sudo chmod 755 {dest}")
+
+
+def _port_in_use(port):
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("0.0.0.0", port))
+            return False
+        except OSError:
+            return True
 
 
 def _wait_health(port, attempts=30, delay=1):
@@ -89,10 +124,24 @@ def main():
     venv_dir = os.path.join(install_dir, ".venv")
     venv_python = os.path.join(venv_dir, "bin", "python")
     print("\n[2/7] Setting up Python environment…")
+    py = _python_with_ssl()
+    if not py:
+        print("⚠️  No Python with SSL support found (pip needs it). Install one, e.g. `brew install python`.")
+        sys.exit(1)
+    if os.path.exists(venv_python):
+        r = subprocess.run([venv_python, "-c", "import ssl"], capture_output=True)
+        if r.returncode != 0:
+            print(f"Existing venv at {venv_dir} has a broken SSL module — recreating with {py}…")
+            shutil.rmtree(venv_dir)
     if not os.path.exists(venv_python):
-        sh([sys.executable, "-m", "venv", venv_dir])
-    sh([venv_python, "-m", "pip", "install", "--quiet", "--upgrade", "pip"])
-    sh([venv_python, "-m", "pip", "install", "--quiet", "-r", os.path.join(install_dir, "requirements.txt")])
+        sh([py, "-m", "venv", venv_dir])
+    print(f"Using {py} → venv at {venv_dir}")
+    try:
+        sh([venv_python, "-m", "pip", "install", "--quiet", "--upgrade", "pip"])
+        sh([venv_python, "-m", "pip", "install", "--quiet", "-r", os.path.join(install_dir, "requirements.txt")])
+    except subprocess.CalledProcessError:
+        print(f"⚠️  pip install failed — try manually: {venv_python} -m pip install -r {install_dir}/requirements.txt")
+        sys.exit(1)
 
     # 3. CLI scripts
     print("\n[3/7] Installing CLI scripts…")
@@ -116,6 +165,11 @@ def main():
     cfg.setdefault("port", DEFAULT_PORT)
     _write_json_600(config_path, cfg)
     print(f"Config written to {config_path} (mode 600).")
+
+    # 4b. Warn if the port is already in use (e.g. by VS Code on 8787)
+    if _port_in_use(cfg["port"]):
+        print(f"⚠️  Port {cfg['port']} is already in use — the server will fail to start.")
+        print("   Pick a free port: edit \"port\" in " + config_path + " and rerun.")
 
     # 5. LaunchAgent plist
     print("\n[5/7] Installing LaunchAgent…")

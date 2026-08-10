@@ -13,7 +13,7 @@ display.
 ## How it works
 
 ```
-[iPhone] ──Tailscale──▶ [Mac Studio:8787 (FastAPI)]
+[iPhone] ──Tailscale──▶ [Mac Studio:8797 (FastAPI)]
                             │ 1. clone/fetch repo → ~/DevOpen/workspaces
                             │ 2. devcontainer up --remove-existing-container
                             │ 3. code --new-window --folder-uri vscode-remote://dev-container+<id>
@@ -25,7 +25,7 @@ display.
   Docker Desktop), ensures the `devcontainer` CLI (installs `@devcontainers/cli`
   via npm on first use), clones or updates the repo, runs `devcontainer up`,
   and opens the VS Code window.
-- **HTTP server** (`devopen/server.py`): FastAPI on `0.0.0.0:8787`.
+- **HTTP server** (`devopen/server.py`): FastAPI on `0.0.0.0:8797`.
 - **LaunchAgent** (`com.nick.devopen.plist`): per-user agent (needs the GUI
   session so the window can open on the display), `KeepAlive` + `RunAtLoad`.
 - **Config**: `~/.devopen/config.json` (mode 600) — token, host, port,
@@ -74,7 +74,7 @@ ssh mac-studio devopen https://github.com/you/your-repo.git
 ### HTTP API
 
 ```bash
-curl -X POST http://mac-studio:8787/open \
+curl -X POST http://mac-studio:8797/open \
      -H "Authorization: Bearer <token>" \
      -d '{"repo": "https://github.com/you/your-repo.git", "branch": "optional"}'
 ```
@@ -91,10 +91,10 @@ token gets `401`.
 
 ### iPhone one-tap
 
-- **iOS Shortcut**: *Get Contents of URL* → `POST http://mac-studio:8787/open`,
+- **iOS Shortcut**: *Get Contents of URL* → `POST http://mac-studio:8797/open`,
   headers `Authorization: Bearer <token>`, body JSON `{"repo": "…"}`. Add to
   Home Screen.
-- **Safari bookmark**: `http://mac-studio:8787/open?token=<token>&repo=<url>`
+- **Safari bookmark**: `http://mac-studio:8797/open?token=<token>&repo=<url>`
 - **Blink**: `curl` or `ssh mac-studio devopen <repo>`
 
 ## Configuration
@@ -107,7 +107,7 @@ token gets `401`.
   "install_dir": "/Users/<you>/DevOpen/devopen",
   "workspaces_dir": "/Users/<you>/DevOpen/workspaces",
   "host": "0.0.0.0",
-  "port": 8787
+  "port": 8797
 }
 ```
 

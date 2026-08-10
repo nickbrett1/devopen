@@ -64,7 +64,28 @@ workspaces are left untouched (they're your data) — remove with
 devopen https://github.com/you/your-repo.git
 devopen you/your-repo              # owner/repo shorthand works too
 devopen you/your-repo -b feature/x
-devopen                            # interactive picker of existing workspaces
+devopen                            # interactive picker: workspaces + all your GitHub repos
+```
+
+Run `devopen` with no arguments for the interactive picker — it lists your
+already-cloned workspaces first, then **all of your GitHub repos** (private
+included — it reads the PAT from your macOS keychain via `git credential
+fill`, falling back to the public API). Pick a number, or press `0` to paste
+any URL:
+
+```
+Pick a repo to open:
+
+  Workspaces (already cloned):
+    [ 1] agy-telemetry
+
+  Your GitHub repos:
+    [ 2] nickbrett1/devopen
+    [ 3] nickbrett1/stripe-toddler
+    ...
+
+    [ 0] Enter a repo URL
+>
 ```
 
 ### From Blink on your iPhone
@@ -76,8 +97,8 @@ The repo is just a command-line argument — type the URL, or the shorter
 ssh mac-studio devopen nickbrett1/agy-telemetry
 ```
 
-Run `devopen` with **no repo** for an interactive picker of already-cloned
-workspaces (needs a TTY, so use `-t`):
+Run `devopen` with **no repo** for the interactive picker — workspaces plus
+all your GitHub repos (needs a TTY, so use `-t`):
 
 ```bash
 ssh -t mac-studio devopen

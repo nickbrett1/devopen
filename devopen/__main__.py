@@ -2,8 +2,8 @@
 
 Installed as /usr/local/bin/devopen by install.py.
 
-With no repo argument, shows an interactive picker of already-cloned
-workspaces (plus the option to paste a new URL).
+With no repo argument, shows an interactive picker: already-cloned
+workspaces first, then all of your GitHub repos, then a free-text option.
 """
 
 import argparse
@@ -11,9 +11,49 @@ import glob
 import os
 import subprocess
 import sys
+import warnings
+
+# subprocess text-mode pipes leave unclosed TextIOWrappers until GC; silence
+# the resulting shutdown noise (CPython quirk, harmless in a short-lived CLI).
+warnings.filterwarnings("ignore", category=ResourceWarning)
 
 from . import config
 from .opener import DevopenError, open_repo
+
+
+def _workspace_entries(workspaces_dir):
+    """(label, origin_url) for every already-cloned workspace."""
+    entries = []
+    for d in sorted(glob.glob(os.path.join(workspaces_dir, "*"))):
+        if not (os.path.isdir(d) and os.path.isdir(os.path.join(d, ".git"))):
+            continue
+        url = d
+        try:
+            r = subprocess.run(
+                ["git", "-C", d, "remote", "get-url", "origin"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                url = r.stdout.strip()
+        except Exception:
+            pass
+        entries.append((os.path.basename(d), url))
+    return entries
+
+
+def _github_entries(workspaces_dir, cfg):
+    """(label, url) for GitHub repos, skipping ones already in workspaces."""
+    try:
+        from .repos import list_repos
+        names = list_repos(cfg.get("github_username", "nickbrett1"), limit=100)
+    except Exception:
+        return []
+    have = {os.path.basename(d) for d, _ in _workspace_entries(workspaces_dir)}
+    return [
+        (name, f"https://github.com/{name}.git")
+        for name in names
+        if name.split("/")[-1] not in have
+    ]
 
 
 def _interactive_pick(workspaces_dir):
@@ -21,14 +61,25 @@ def _interactive_pick(workspaces_dir):
         print("No repo given and stdin is not interactive — pass a repo URL:", file=sys.stderr)
         print("  devopen nickbrett1/your-repo", file=sys.stderr)
         sys.exit(1)
-    existing = sorted(
-        d for d in glob.glob(os.path.join(workspaces_dir, "*"))
-        if os.path.isdir(d) and os.path.isdir(os.path.join(d, ".git"))
-    )
-    print("Select a workspace (existing clone) or enter a new repo:")
-    for i, d in enumerate(existing, 1):
-        print(f"  [{i}] {os.path.basename(d)}")
-    print("  [0] Enter a new repo URL")
+
+    cfg = config.load()
+    workspaces = _workspace_entries(workspaces_dir)
+    github = _github_entries(workspaces_dir, cfg)
+
+    print("Pick a repo to open:")
+    if workspaces:
+        print("\n  Workspaces (already cloned):")
+        for i, (label, _url) in enumerate(workspaces, 1):
+            print(f"    [{i:>2}] {label}")
+    if github:
+        start = len(workspaces) + 1
+        print("\n  Your GitHub repos:")
+        for i, (label, _url) in enumerate(github, start):
+            print(f"    [{i:>2}] {label}")
+    print("\n    [ 0] Enter a repo URL")
+    print()
+
+    entries = workspaces + github
     while True:
         try:
             choice = input("> ").strip()
@@ -44,12 +95,8 @@ def _interactive_pick(workspaces_dir):
                 if url:
                     return url
                 continue
-            if 1 <= n <= len(existing):
-                r = subprocess.run(
-                    ["git", "-C", existing[n - 1], "remote", "get-url", "origin"],
-                    capture_output=True, text=True,
-                )
-                return r.stdout.strip() or existing[n - 1]
+            if 1 <= n <= len(entries):
+                return entries[n - 1][1]
             print("  Not in range — try again.")
         else:
             return choice

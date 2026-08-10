@@ -13,8 +13,9 @@ fi
 
 read -r INSTALL_DIR HOST PORT <<< "$(python3 - "$CONFIG" <<'EOF'
 import json, sys
-c = json.load(open(sys.argv[1]))
-print(c["install_dir"], c.get("host", "0.0.0.0"), c.get("port", 8787))
+with open(sys.argv[1]) as f:
+    c = json.load(f)
+print(c["install_dir"], c.get("host", "0.0.0.0"), c.get("port", 8797))
 EOF
 )"
 

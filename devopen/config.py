@@ -40,6 +40,7 @@ def _defaults(home=None):
         "host": DEFAULT_HOST,
         "port": DEFAULT_PORT,
         "token": "",
+        "github_username": "nickbrett1",
     }
 
 

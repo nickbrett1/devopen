@@ -13,9 +13,14 @@ fi
 
 INSTALL_DIR="$(python3 - "$CONFIG" <<'EOF'
 import json, sys
-print(json.load(open(sys.argv[1]))["install_dir"])
+with open(sys.argv[1]) as f:
+    print(json.load(f)["install_dir"])
 EOF
 )"
 
 export PYTHONPATH="$INSTALL_DIR${PYTHONPATH:+:$PYTHONPATH}"
+# Use the install venv's python (the system pyenv python here lacks SSL support).
+if [ -x "$INSTALL_DIR/.venv/bin/python" ]; then
+  exec "$INSTALL_DIR/.venv/bin/python" -m devopen "$@"
+fi
 exec python3 -m devopen "$@"

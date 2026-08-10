@@ -62,14 +62,36 @@ workspaces are left untouched (they're your data) — remove with
 
 ```bash
 devopen https://github.com/you/your-repo.git
-devopen https://github.com/you/your-repo.git -b feature/x
+devopen you/your-repo              # owner/repo shorthand works too
+devopen you/your-repo -b feature/x
+devopen                            # interactive picker of existing workspaces
 ```
 
-From your iPhone in Blink:
+### From Blink on your iPhone
+
+The repo is just a command-line argument — type the URL, or the shorter
+`owner/repo` form:
 
 ```bash
-ssh mac-studio devopen https://github.com/you/your-repo.git
+ssh mac-studio devopen nickbrett1/agy-telemetry
 ```
+
+Run `devopen` with **no repo** for an interactive picker of already-cloned
+workspaces (needs a TTY, so use `-t`):
+
+```bash
+ssh -t mac-studio devopen
+```
+
+Or fire-and-forget the HTTP API (log streams to the terminal):
+
+```bash
+curl -s -X POST http://mac-studio:8797/open \
+     -H "Authorization: Bearer <token>" \
+     -d '{"repo": "nickbrett1/agy-telemetry"}'
+```
+
+The `owner/repo` shorthand works everywhere — CLI, picker, and the HTTP API.
 
 ### HTTP API
 

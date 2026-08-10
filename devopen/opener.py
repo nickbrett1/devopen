@@ -87,6 +87,18 @@ def ensure_devcontainer_cli(on_log=log_stdout):
 # Repo handling
 # --------------------------------------------------------------------------
 
+def normalize_repo(repo):
+    """Expand 'owner/repo' → 'https://github.com/owner/repo.git'; pass URLs through."""
+    repo = (repo or "").strip()
+    if not repo:
+        return repo
+    if repo.startswith(("http://", "https://", "git@", "ssh://", "git://")):
+        return repo
+    if "/" in repo and not repo.startswith("/"):
+        return f"https://github.com/{repo}" if repo.endswith(".git") else f"https://github.com/{repo}.git"
+    return repo
+
+
 def repo_dir_name(repo_url):
     """Derive a directory name from a repo URL."""
     name = repo_url.rstrip("/").split("/")[-1] or "workspace"
@@ -174,6 +186,7 @@ def open_in_vscode(container_id, workspace_folder, on_log=log_stdout):
 
 def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout):
     """Full open flow. Returns the vscode-remote URI on success."""
+    repo_url = normalize_repo(repo_url)
     if not repo_url:
         raise DevopenError("repo URL is required.")
     if not workspaces_dir:

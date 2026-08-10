@@ -1,50 +1,59 @@
 # devopen
 
-Remote devcontainer opener service. One HTTP call (or CLI command) that:
+Open any of your devcontainer projects in VS Code from a terminal — locally
+or over SSH from your phone. `devopen`:
 
-1. clones/fetches a GitHub repo
+1. clones/fetches the repo
 2. builds & starts its devcontainer (`devcontainer up --remove-existing-container`)
 3. opens a **new VS Code window** attached to that container on the Mac
 
-Trigger it from your iPhone over Tailscale while you're away from the machine —
-by the time you mosh in, the container is up and VS Code is open on the Mac
-display.
-
-## How it works
+Run it bare and it shows an interactive picker of your workspaces plus **all
+your GitHub repos** (private included); run it with an argument and it goes
+straight to work. An optional HTTP server (`install.py --with-server`) adds a
+one-tap URL for iPhone Shortcuts / Safari — but the CLI alone needs nothing
+listening on any port.
 
 ```
-[iPhone] ──Tailscale──▶ [Mac Studio:8797 (FastAPI)]
-                            │ 1. clone/fetch repo → ~/DevOpen/workspaces
-                            │ 2. devcontainer up --remove-existing-container
-                            │ 3. code --new-window --folder-uri vscode-remote://dev-container+<id>
-                            ▼
-                  [VS Code window on Mac display] + [container on tailnet for mosh]
+[terminal / iPhone (Blink)] ──Tailscale──▶ [Mac Studio]
+    devopen [nickbrett1/repo]
+        │ 1. clone/fetch repo → ~/DevOpen/workspaces
+        │ 2. devcontainer up --remove-existing-container
+        │ 3. code --new-window --folder-uri vscode-remote://dev-container+<id>
+        ▼
+[VS Code window on Mac display] + [container on tailnet for mosh]
 ```
 
 - **Core logic** (`devopen/opener.py`): ensures Docker is running (auto-launches
   Docker Desktop), ensures the `devcontainer` CLI (installs `@devcontainers/cli`
   via npm on first use), clones or updates the repo, runs `devcontainer up`,
   and opens the VS Code window.
-- **HTTP server** (`devopen/server.py`): FastAPI on `0.0.0.0:8797`.
-- **LaunchAgent** (`com.nick.devopen.plist`): per-user agent (needs the GUI
-  session so the window can open on the display), `KeepAlive` + `RunAtLoad`.
-- **Config**: `~/.devopen/config.json` (mode 600) — token, host, port,
-  workspaces dir.
+- **Repo picker** (`devopen/repos.py` + CLI): lists already-cloned workspaces,
+  then all GitHub repos via the keychain PAT (`git credential fill`), so your
+  private repos show up with zero extra setup.
+- **HTTP server** (`devopen/server.py`, *optional*): FastAPI on `0.0.0.0:8797`,
+  installed with `--with-server` (LaunchAgent `com.nick.devopen.plist`).
+- **Config**: `~/.devopen/config.json` (mode 600) — workspaces dir, and the
+  token/host/port for the optional server.
 
 ## Installation
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nickbrett1/devopen/main/install.py | python3
+# add the optional HTTP server (iPhone one-tap / Shortcut / genproj hook):
+curl -fsSL https://raw.githubusercontent.com/nickbrett1/devopen/main/install.py | python3 - --with-server
 ```
 
 The installer:
 
 1. clones the repo to `~/DevOpen/devopen`
 2. creates a venv and installs `fastapi` + `uvicorn`
-3. installs `/usr/local/bin/devopen` (CLI) and `/usr/local/bin/devopen-server` (launchd wrapper)
-4. writes `~/.devopen/config.json` with a fresh token (`openssl rand`-style hex)
-5. installs + loads `~/Library/LaunchAgents/com.nick.devopen.plist`
-6. ensures the `devcontainer` CLI is present, then verifies `/health`
+3. installs `/usr/local/bin/devopen` (CLI)
+4. writes `~/.devopen/config.json` (fresh token included, mode 600)
+5. with `--with-server`: also installs `/usr/local/bin/devopen-server` +
+   `~/Library/LaunchAgents/com.nick.devopen.plist` (per-user agent —
+   `KeepAlive` + `RunAtLoad`)
+6. ensures the `devcontainer` CLI is present; with the server, verifies
+   `/health`
 
 ## Uninstallation
 
@@ -114,7 +123,7 @@ curl -s -X POST http://mac-studio:8797/open \
 
 The `owner/repo` shorthand works everywhere — CLI, picker, and the HTTP API.
 
-### HTTP API
+### HTTP API (requires the optional `--with-server` install)
 
 ```bash
 curl -X POST http://mac-studio:8797/open \
@@ -132,7 +141,14 @@ Streams the full build log; ends with `[devopen] SUCCESS <uri>` or
 Only one open runs at a time — a concurrent request gets `409`. Wrong/missing
 token gets `401`.
 
-### iPhone one-tap
+### iPhone (Blink — works with CLI-only install)
+
+```bash
+ssh mac-studio devopen              # pick from workspaces + all your GitHub repos
+ssh mac-studio devopen nickbrett1/your-repo
+```
+
+### iPhone one-tap (requires the optional `--with-server` install)
 
 - **iOS Shortcut — share sheet (recommended, no repo typing)**: the shortcut
   starts with *Receive [URLs] from Share Sheet*, then *Get Contents of URL* →
@@ -141,7 +157,7 @@ token gets `401`.
   Share → the shortcut. Or use *Ask for Input* + the same request for a
   Home Screen icon that prompts for a URL.
 - **Safari bookmark**: `http://mac-studio:8797/open?token=<token>&repo=<url>`
-- **Blink**: `curl` or `ssh mac-studio devopen <repo>`
+- **Blink**: `curl -s -X POST http://mac-studio:8797/open -H "Authorization: Bearer <token>" -d '{"repo":"nickbrett1/your-repo"}'`
 
 ## Configuration
 

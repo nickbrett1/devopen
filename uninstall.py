@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Uninstall the devopen service.
+"""Uninstall the devopen CLI and (if present) the HTTP server.
 
-Removes the LaunchAgent, /usr/local/bin scripts, and ~/.devopen config/logs.
-Leaves ~/DevOpen (service code + workspaces) intact — those are user data;
-remove manually with: rm -rf ~/DevOpen
+Removes /usr/local/bin scripts, the LaunchAgent + plist, and ~/.devopen
+config/logs. Leaves ~/DevOpen (service code + workspaces) intact — those are
+user data; remove manually with: rm -rf ~/DevOpen
 
 Run it standalone:
     curl -fsSL https://raw.githubusercontent.com/nickbrett1/devopen/main/uninstall.py | python3
@@ -24,23 +24,31 @@ def main():
 
     print("Uninstalling devopen…")
 
-    # 1. Unload the LaunchAgent
-    print("Unloading LaunchAgent…")
-    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{PLIST_LABEL}"])
-    if os.path.exists(plist_dest):
-        os.remove(plist_dest)
-        print(f"Removed {plist_dest}")
+    # 1. CLI script
+    cli = "/usr/local/bin/devopen"
+    if os.path.exists(cli):
+        try:
+            os.remove(cli)
+            print(f"Removed {cli}")
+        except PermissionError:
+            print(f"⚠️  Cannot remove {cli} (permissions). Run with sudo.")
 
-    # 2. Remove CLI scripts
-    for dest in ("/usr/local/bin/devopen", "/usr/local/bin/devopen-server"):
-        if os.path.exists(dest):
+    # 2. HTTP server artifacts (if present)
+    server_wrapper = "/usr/local/bin/devopen-server"
+    if os.path.exists(plist_dest) or os.path.exists(server_wrapper):
+        print("Removing HTTP server (LaunchAgent, wrapper)…")
+        subprocess.run(["launchctl", "bootout", f"gui/{uid}/{PLIST_LABEL}"])
+        if os.path.exists(plist_dest):
+            os.remove(plist_dest)
+            print(f"Removed {plist_dest}")
+        if os.path.exists(server_wrapper):
             try:
-                os.remove(dest)
-                print(f"Removed {dest}")
+                os.remove(server_wrapper)
+                print(f"Removed {server_wrapper}")
             except PermissionError:
-                print(f"⚠️  Cannot remove {dest} (permissions). Run with sudo.")
+                print(f"⚠️  Cannot remove {server_wrapper} (permissions). Run with sudo.")
 
-    # 3. Remove config + logs
+    # 3. Config + logs
     if os.path.isdir(config_dir):
         shutil.rmtree(config_dir)
         print(f"Removed {config_dir}")

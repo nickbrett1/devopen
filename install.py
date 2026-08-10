@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Install the devopen service on macOS.
+"""Install the devopen CLI (and optionally the HTTP server).
 
-Clones the repo, creates a venv, installs the CLI scripts to /usr/local/bin,
-writes ~/.devopen/config.json (with a fresh token), installs and loads the
-LaunchAgent, and verifies /health.
+Default: CLI only (`devopen` + interactive picker) — nothing listens on a port.
+Add `--with-server` (or set DEVOPEN_ENABLE_SERVER=1) to also install the
+FastAPI server + LaunchAgent for iPhone one-tap / Shortcut / genproj hooks.
 
 Run it standalone (no clone needed):
     curl -fsSL https://raw.githubusercontent.com/nickbrett1/devopen/main/install.py | python3
+    curl -fsSL https://raw.githubusercontent.com/nickbrett1/devopen/main/install.py | python3 - --with-server
 
 Overrides (env): DEVOPEN_HOME (default ~/DevOpen), DEVOPEN_WORKSPACES,
 DEVOPEN_SKIP_UPDATE=1 (skip git pull of an existing checkout).
@@ -29,15 +30,6 @@ DEFAULT_PORT = 8797
 def sh(cmd, check=True):
     print("$ " + " ".join(cmd), flush=True)
     return subprocess.run(cmd, check=check)
-
-
-def _write_json_600(path, data):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
 
 
 def _python_with_ssl():
@@ -73,6 +65,15 @@ def _install_script(src, dest):
         print(f"    sudo cp {src} {dest} && sudo chmod 755 {dest}")
 
 
+def _write_json_600(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
 def _port_in_use(port):
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -99,6 +100,7 @@ def _wait_health(port, attempts=30, delay=1):
 
 
 def main():
+    enable_server = "--with-server" in sys.argv or os.environ.get("DEVOPEN_ENABLE_SERVER") == "1"
     home = os.path.expanduser("~")
     devopen_home = os.environ.get("DEVOPEN_HOME") or os.path.join(home, "DevOpen")
     install_dir = os.path.join(devopen_home, "devopen")
@@ -107,7 +109,8 @@ def main():
     config_path = os.path.join(config_dir, "config.json")
     plist_dest = os.path.join(home, "Library", "LaunchAgents", f"{PLIST_LABEL}.plist")
 
-    print(f"Installing devopen…\n  install dir:   {install_dir}\n  workspaces:    {workspaces_dir}")
+    mode = "CLI + HTTP server" if enable_server else "CLI only (no port open)"
+    print(f"Installing devopen ({mode})…\n  install dir:   {install_dir}\n  workspaces:    {workspaces_dir}")
 
     # 1. Clone / update the repo
     os.makedirs(devopen_home, exist_ok=True)
@@ -143,12 +146,11 @@ def main():
         print(f"⚠️  pip install failed — try manually: {venv_python} -m pip install -r {install_dir}/requirements.txt")
         sys.exit(1)
 
-    # 3. CLI scripts
-    print("\n[3/7] Installing CLI scripts…")
+    # 3. CLI script (always)
+    print("\n[3/7] Installing CLI script…")
     _install_script(os.path.join(install_dir, "scripts", "devopen"), "/usr/local/bin/devopen")
-    _install_script(os.path.join(install_dir, "scripts", "devopen-server"), "/usr/local/bin/devopen-server")
 
-    # 4. Config + token
+    # 4. Config + token (token only matters if the server is enabled later)
     print("\n[4/7] Writing config + token…")
     os.makedirs(config_dir, exist_ok=True)
     cfg = {}
@@ -166,56 +168,75 @@ def main():
     _write_json_600(config_path, cfg)
     print(f"Config written to {config_path} (mode 600).")
 
-    # 4b. Warn if the port is already in use (e.g. by VS Code on 8787)
-    if _port_in_use(cfg["port"]):
-        print(f"⚠️  Port {cfg['port']} is already in use — the server will fail to start.")
-        print("   Pick a free port: edit \"port\" in " + config_path + " and rerun.")
+    # 5. HTTP server (optional)
+    if enable_server:
+        print("\n[5/7] Installing HTTP server (LaunchAgent)…")
+        _install_script(
+            os.path.join(install_dir, "scripts", "devopen-server"),
+            "/usr/local/bin/devopen-server",
+        )
+        if _port_in_use(cfg["port"]):
+            print(f"⚠️  Port {cfg['port']} is already in use — the server will fail to start.")
+            print("   Pick a free port: edit \"port\" in " + config_path + " and rerun.")
+        with open(os.path.join(install_dir, "com.nick.devopen.plist"), encoding="utf-8") as f:
+            plist = f.read().replace("__HOME__", home)
+        with open(plist_dest, "w", encoding="utf-8") as f:
+            f.write(plist)
+        print(f"LaunchAgent written to {plist_dest}.")
+        uid = os.getuid()
+        sh(["launchctl", "bootout", f"gui/{uid}/{PLIST_LABEL}"], check=False)
+        sh(["launchctl", "bootstrap", f"gui/{uid}", plist_dest])
+        sh(["launchctl", "kickstart", "-k", f"gui/{uid}/{PLIST_LABEL}"], check=False)
+    else:
+        print("\n[5/7] Skipping HTTP server (CLI-only mode).")
+        print("   Re-run with `--with-server` (or DEVOPEN_ENABLE_SERVER=1) to enable one-tap / Shortcut.")
 
-    # 5. LaunchAgent plist
-    print("\n[5/7] Installing LaunchAgent…")
-    with open(os.path.join(install_dir, "com.nick.devopen.plist"), encoding="utf-8") as f:
-        plist = f.read().replace("__HOME__", home)
-    with open(plist_dest, "w", encoding="utf-8") as f:
-        f.write(plist)
-    print(f"LaunchAgent written to {plist_dest}.")
-
-    # 6. Load the agent
-    print("\n[6/7] Loading LaunchAgent…")
-    uid = os.getuid()
-    sh(["launchctl", "bootout", f"gui/{uid}/{PLIST_LABEL}"], check=False)
-    sh(["launchctl", "bootstrap", f"gui/{uid}", plist_dest])
-    sh(["launchctl", "kickstart", "-k", f"gui/{uid}/{PLIST_LABEL}"], check=False)
-
-    # 7. devcontainer CLI + health check
-    print("\n[7/7] Checking devcontainer CLI…")
+    # 6. devcontainer CLI (needed by the opener regardless of mode)
+    print("\n[6/7] Checking devcontainer CLI…")
     if shutil.which("devcontainer") is None:
         if shutil.which("npm") is None:
             print("⚠️  devcontainer CLI is missing and npm is not available — the opener will need it on first use.")
         else:
             print("Installing @devcontainers/cli (used by the opener)…")
             sh(["npm", "install", "-g", "@devcontainers/cli"], check=False)
+    else:
+        print(f"devcontainer CLI found: {shutil.which('devcontainer')}")
 
-    port = cfg["port"]
-    print(f"Waiting for server on 127.0.0.1:{port}…")
-    if not _wait_health(port):
-        print("⚠️  Server did not respond to /health. Check ~/.devopen/server.err.log")
+    # 7. Health check (server mode only)
+    if enable_server:
+        port = cfg["port"]
+        print(f"\n[7/7] Waiting for server on 127.0.0.1:{port}…")
+        if not _wait_health(port):
+            print("⚠️  Server did not respond to /health. Check ~/.devopen/server.err.log")
+    else:
+        print("\n[7/7] Skipping health check (no server in CLI-only mode).")
 
     print()
     print("=" * 62)
     print("  devopen installed successfully! 🎉")
     print("=" * 62)
-    print(f"  Token:        {cfg['token']}")
-    print(f"  Server:       http://{cfg['host']}:{port}")
+    print(f"  Mode:         {mode}")
+    if enable_server:
+        print(f"  Token:        {cfg['token']}")
+        print(f"  Server:       http://{cfg['host']}:{cfg['port']}")
     print(f"  Workspaces:   {workspaces_dir}")
     print()
-    print("Trigger from your iPhone (Tailscale node: mac-studio):")
-    print(f'  curl -X POST http://mac-studio:{port}/open \\')
-    print(f"       -H 'Authorization: Bearer {cfg['token']}' \\")
-    print(f'       -d \'{{"repo": "https://github.com/you/your-repo.git"}}\'')
-    print(f"  Safari:  http://mac-studio:{port}/open?token={cfg['token']}&repo=https://github.com/you/your-repo.git")
-    print("  Blink:   ssh mac-studio devopen https://github.com/you/your-repo.git")
-    print()
-    print("Keep the token safe — it is also in ~/.devopen/config.json.")
+    print("Use it:")
+    print("  devopen                     # interactive picker (workspaces + all GitHub repos)")
+    print("  devopen nickbrett1/your-repo")
+    print("  ssh -t mac-studio devopen   # same picker from Blink")
+    if enable_server:
+        print()
+        print("Trigger from your iPhone (Tailscale node: mac-studio):")
+        print(f'  curl -X POST http://mac-studio:{cfg["port"]}/open \\')
+        print(f"       -H 'Authorization: Bearer {cfg['token']}' \\")
+        print(f'       -d \'{{"repo": "https://github.com/you/your-repo.git"}}\'')
+        print(f"  Safari:  http://mac-studio:{cfg['port']}/open?token={cfg['token']}&repo=…")
+        print("  Keep the token safe — it is also in ~/.devopen/config.json.")
+    else:
+        print()
+        print("HTTP server not installed (CLI-only). To enable the iPhone one-tap / Shortcut path:")
+        print("  curl -fsSL https://raw.githubusercontent.com/nickbrett1/devopen/main/install.py | python3 - --with-server")
 
 
 if __name__ == "__main__":

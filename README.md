@@ -134,9 +134,12 @@ token gets `401`.
 
 ### iPhone one-tap
 
-- **iOS Shortcut**: *Get Contents of URL* → `POST http://mac-studio:8797/open`,
-  headers `Authorization: Bearer <token>`, body JSON `{"repo": "…"}`. Add to
-  Home Screen.
+- **iOS Shortcut — share sheet (recommended, no repo typing)**: the shortcut
+  starts with *Receive [URLs] from Share Sheet*, then *Get Contents of URL* →
+  `POST http://mac-studio:8797/open`, headers `Authorization: Bearer <token>`,
+  body JSON `{"repo": "{{Shortcut Input}}"}`. Open a repo on GitHub in Safari →
+  Share → the shortcut. Or use *Ask for Input* + the same request for a
+  Home Screen icon that prompts for a URL.
 - **Safari bookmark**: `http://mac-studio:8797/open?token=<token>&repo=<url>`
 - **Blink**: `curl` or `ssh mac-studio devopen <repo>`
 
@@ -161,6 +164,8 @@ token gets `401`.
 
 ## Gotchas
 
+- **Port is 8797, not 8787** — VS Code's own Code Helper process listens on
+  8787 (and 8788), so devopen uses 8797 to avoid the clash.
 - **LaunchAgent, not LaunchDaemon** — the service must run in your GUI session
   so `code` can open a window on the display.
 - Docker Desktop must be installed; devopen launches it and waits if it's not
@@ -181,7 +186,8 @@ devopen/
 │   ├── opener.py               # core: docker → devcontainer CLI → clone → up → open
 │   ├── server.py               # FastAPI app
 │   ├── config.py               # ~/.devopen/config.json handling
-│   └── __main__.py             # CLI (`python3 -m devopen`)
+│   ├── repos.py                # GitHub repo listing (keychain PAT → API, via curl)
+│   └── __main__.py             # CLI (`python3 -m devopen`) + interactive picker
 ├── scripts/
 │   ├── devopen                 # → /usr/local/bin/devopen
 │   └── devopen-server          # → /usr/local/bin/devopen-server (launchd wrapper)

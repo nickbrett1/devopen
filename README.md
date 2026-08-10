@@ -94,6 +94,7 @@ Pick a repo to open:
     ...
 
     [ 0] Enter a repo URL
+    [ q] Quit
 >
 ```
 

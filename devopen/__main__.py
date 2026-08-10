@@ -77,17 +77,21 @@ def _interactive_pick(workspaces_dir):
         for i, (label, _url) in enumerate(github, start):
             print(f"    [{i:>2}] {label}")
     print("\n    [ 0] Enter a repo URL")
+    print("    [ q] Quit")
     print()
 
     entries = workspaces + github
     while True:
         try:
-            choice = input("> ").strip()
+            choice = input("> ").strip().lower()
         except (EOFError, KeyboardInterrupt):
-            print()
-            sys.exit(1)
+            print("\nBye.")
+            sys.exit(0)
         if not choice:
             continue
+        if choice in ("q", "quit", "exit"):
+            print("Bye.")
+            sys.exit(0)
         if choice.isdigit():
             n = int(choice)
             if n == 0:

@@ -209,9 +209,50 @@ def _container_workspace_path(container_id, local_folder):
     return f"/workspaces/{fallback_name}"
 
 
+def _docker_context_name():
+    try:
+        r = subprocess.run(["docker", "context", "show"], capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except OSError:
+        pass
+    return None
+
+
+def _vscode_devcontainer_uri(local_folder, workspace_path):
+    """Build the vscode-remote URI the way VS Code's Dev Containers extension does.
+
+    The container-id form (`dev-container+<id>/<path>`) resolves to a garbage
+    workspace folder on some setups — observed on OrbStack + VS Code 1.132 —
+    which makes the extension spawn docker with a corrupted cwd and surface as
+    "docker: command not found". The extension's own host-path form —
+    `dev-container+<hex-json of {hostPath, settings, configFile}>/<in-container
+    workspaceFolder>` — resolves cleanly (this is the URI the extension stores
+    for bind-mounted workspaces).
+    """
+    cfg_file = os.path.join(local_folder, ".devcontainer", "devcontainer.json")
+    if not os.path.isfile(cfg_file):
+        cfg_file = os.path.join(local_folder, ".devcontainer.json")
+    obj = {
+        "hostPath": local_folder,
+        "localDocker": False,
+        "settings": {"context": _docker_context_name() or "orbstack"},
+    }
+    if os.path.isfile(cfg_file):
+        obj["configFile"] = {
+            "$mid": 1,
+            "fsPath": cfg_file,
+            "external": "file://" + cfg_file,
+            "path": cfg_file,
+            "scheme": "file",
+        }
+    authority = "dev-container+" + json.dumps(obj, separators=(",", ":")).encode("utf-8").hex()
+    return f"vscode-remote://{authority}{workspace_path}"
+
+
 def open_in_vscode(container_id, workspace_folder, on_log=log_stdout):
     workspace_path = _container_workspace_path(container_id, workspace_folder)
-    uri = f"vscode-remote://dev-container+{container_id}{workspace_path}"
+    uri = _vscode_devcontainer_uri(workspace_folder, workspace_path)
     on_log(f"Opening VS Code window: {uri}")
     subprocess.Popen(["code", "--new-window", "--folder-uri", uri])
     return uri

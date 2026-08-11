@@ -135,6 +135,13 @@ devopen --tailscale --authkey tskey-... parquet-peek   # non-interactive registr
   once registered, later devopen opens (which recreate the container via
   `--remove-existing-container`) come back on the tailnet automatically —
   no prompt, no flag.
+- **ssh/mosh prep:** after a successful registration devopen also re-runs the
+  SSH host-key restore/backup (stable keys via the tailscale volume) and makes
+  sure `sshd` is up, then prints the connection command:
+  `[devopen] mosh-ready: mosh node@100.x.x.x (ssh node@100.x.x.x)`.
+  Note: closing the VS Code window stops the container (Dev Containers
+  shutdown behavior) — keep the window open (or restart the container) when
+  you want to mosh in from away.
 
 ### From Blink on your iPhone
 

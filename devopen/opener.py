@@ -295,6 +295,67 @@ def _prompt_tailscale():
         return False
 
 
+def _ensure_ssh_hostkeys_and_sshd(container_id, on_log=log_stdout):
+    """Idempotent re-run of the postCreate SSH host-key restore/backup step
+    (mirrors post-create-setup.sh), plus sshd — guarantees mosh/ssh into the
+    container uses stable host keys (persisted in the tailscale volume).
+    """
+    script = r"""
+set -e
+sudo mkdir -p /var/lib/tailscale/ssh
+if [ -n "$(ls -A /var/lib/tailscale/ssh/ssh_host_* 2>/dev/null)" ]; then
+  sudo cp -f /var/lib/tailscale/ssh/ssh_host_* /etc/ssh/
+  sudo chmod 600 /etc/ssh/ssh_host_*_key
+  sudo chmod 644 /etc/ssh/ssh_host_*_key.pub 2>/dev/null || true
+  echo "HOSTKEYS: restored from volume"
+else
+  sudo ssh-keygen -A || true
+  sudo cp -f /etc/ssh/ssh_host_* /var/lib/tailscale/ssh/
+  echo "HOSTKEYS: generated + backed up to volume"
+fi
+sudo service ssh restart >/dev/null 2>&1 || sudo /usr/sbin/sshd || true
+echo "SSHD: $(pgrep -x sshd >/dev/null && echo running || echo NOT-running)"
+"""
+    try:
+        r = subprocess.run(
+            ["docker", "exec", "-u", "root", container_id, "sh", "-c", script],
+            capture_output=True, text=True, timeout=60,
+        )
+        for line in (r.stdout or "").splitlines():
+            if line.strip():
+                on_log("[devopen] " + line.strip())
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _tailnet_ip(container_id):
+    try:
+        r = subprocess.run(
+            ["docker", "exec", "-u", "root", container_id, "tailscale", "ip", "-4"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip().splitlines()[0]
+    except Exception:
+        pass
+    return None
+
+
+def _remote_user(local_folder):
+    """remoteUser from the repo's devcontainer config (default 'root')."""
+    import json as _json
+    for path in (os.path.join(local_folder, ".devcontainer", "devcontainer.json"),
+                 os.path.join(local_folder, ".devcontainer.json")):
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return _json.load(f).get("remoteUser") or "root"
+            except (OSError, ValueError):
+                break
+    return "root"
+
+
 def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
     """Best-effort registration of the container on Tailscale (optional).
 
@@ -380,19 +441,29 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     # Register BEFORE opening the window: the Dev Containers extension stops
     # the container when its window closes, which would make the registration
     # unreachable (docker exec fails on a stopped container).
+    registered = False
     if tailscale is True:
-        tailscale_up(container_id, hostname, authkey=tailscale_authkey, on_log=on_log)
+        registered = tailscale_up(container_id, hostname, authkey=tailscale_authkey, on_log=on_log)
     elif tailscale is None:
         state = tailscale_state(container_id)
         if state == "connected":
             on_log(f"[devopen] tailscale: already connected as '{hostname}'.")
+            registered = True
         elif state == "logged_out":
             on_log("[devopen] tailscale: container has tailscale but is not registered.")
             if _prompt_tailscale():
-                tailscale_up(container_id, hostname, authkey=tailscale_authkey, on_log=on_log)
+                registered = tailscale_up(container_id, hostname, authkey=tailscale_authkey, on_log=on_log)
             else:
                 on_log("[devopen] tailscale: skipped (use --tailscale to register, --no-tailscale to silence).")
         # 'absent' → silently skip
+    if registered:
+        # ssh/mosh prep: stable host keys (restore/backup) + sshd, then show
+        # the exact mosh command with the container's tailnet IP.
+        _ensure_ssh_hostkeys_and_sshd(container_id, on_log=on_log)
+        ip = _tailnet_ip(container_id)
+        if ip:
+            user = _remote_user(folder)
+            on_log(f"[devopen] mosh-ready: mosh {user}@{ip}   (ssh {user}@{ip})")
     uri = open_in_vscode(container_id, folder, on_log=on_log)
     on_log("Done.")
     return uri

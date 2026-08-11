@@ -188,16 +188,18 @@ ssh mac-studio devopen nickbrett1/your-repo
 - **Port is 8797, not 8787** — VS Code's own Code Helper process listens on
   8787 (and 8788), so devopen uses 8797 to avoid the clash.
 - **`docker: command not found` inside VS Code after opening?** The container
-  is fine (devopen built it with docker). Two possible causes:
-  1. VS Code.app launched from the GUI gets a minimal PATH that omits
-     `/usr/local/bin`. Fix in VS Code user settings:
-     `"dev.containers.dockerPath": "/usr/local/bin/docker"` (plus
-     `"dev.containers.dockerComposePath"` if you use compose).
-  2. A stale Dev Containers extension crashes on new VS Code versions
-     (unguarded `navigator` access → `PendingMigrationError` → broken folder
-     resolution → docker spawn fails). Update it:
-     `code --install-extension ms-vscode-remote.remote-containers --force`
-  Either way, fully quit (⌘Q) and relaunch VS Code afterwards.
+  is fine (devopen built it with docker). The usual cause is VS Code.app
+  launched from the GUI getting a minimal PATH that omits `/usr/local/bin` —
+  fix with `"dev.containers.dockerPath": "/usr/local/bin/docker"` in VS Code
+  user settings, then fully quit (⌘Q) and relaunch.
+- **OrbStack + VS Code 1.132 quirk:** the documented attach URI
+  `vscode-remote://dev-container+<container-id>/<path>` resolves to a garbage
+  workspace folder, making the extension spawn docker with a corrupted cwd
+  (surfaces as the same "docker: command not found"). devopen therefore opens
+  the container using the extension's own host-path URI
+  (`dev-container+<hex-json of {hostPath, settings, configFile}>/<in-container
+  workspaceFolder>`) — the same format VS Code stores for bind-mounted
+  workspaces, which resolves cleanly.
 - **LaunchAgent, not LaunchDaemon** — the service must run in your GUI session
   so `code` can open a window on the display.
 - Docker Desktop must be installed; devopen launches it and waits if it's not

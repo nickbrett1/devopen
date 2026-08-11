@@ -313,6 +313,7 @@ def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
         )
 
     # Wait briefly for the tailscale binary + daemon (postCreate starts it).
+    # If the container was stopped (e.g. its VS Code window closed), start it.
     deadline = time.monotonic() + 30
     ready = False
     while time.monotonic() < deadline:
@@ -320,6 +321,7 @@ def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
         if r.returncode == 0:
             ready = True
             break
+        subprocess.run(["docker", "start", container_id], capture_output=True, text=True, timeout=30)
         time.sleep(2)
     if not ready:
         on_log("[devopen] tailscale: not available in this container — skipping.")
@@ -374,8 +376,10 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     on_log(f"Running devcontainer up on {folder} (first build can take minutes)…")
     container_id = _devcontainer_up(folder, on_log=on_log)
     on_log(f"Container ready: {container_id}")
-    uri = open_in_vscode(container_id, folder, on_log=on_log)
     hostname = tailscale_hostname or repo_dir_name(repo_url)
+    # Register BEFORE opening the window: the Dev Containers extension stops
+    # the container when its window closes, which would make the registration
+    # unreachable (docker exec fails on a stopped container).
     if tailscale is True:
         tailscale_up(container_id, hostname, authkey=tailscale_authkey, on_log=on_log)
     elif tailscale is None:
@@ -389,5 +393,6 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
             else:
                 on_log("[devopen] tailscale: skipped (use --tailscale to register, --no-tailscale to silence).")
         # 'absent' → silently skip
+    uri = open_in_vscode(container_id, folder, on_log=on_log)
     on_log("Done.")
     return uri

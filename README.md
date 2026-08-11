@@ -110,13 +110,15 @@ but isn't registered yet, devopen **asks** you after the window opens:
 
 ```
 [devopen] tailscale: container has tailscale but is not registered.
-Register this container on Tailscale? [y/N]
+Register this container on Tailscale? [Y/n]
 ```
 
-Say `y` and devopen runs `tailscale up` inside the container — without an
-authkey it streams the `login.tailscale.com/a/...` URL (open it on any device
-and the container joins); with one it's non-interactive. Already-registered or
-tailscale-less containers are skipped silently.
+The prompt only appears when the container has tailscale but isn't registered —
+i.e. registering is almost always the intent — so **Enter registers** (answer
+`n` to skip, Ctrl-C to cancel). devopen then runs `tailscale up` inside the
+container: without an authkey it streams the `login.tailscale.com/a/...` URL
+(open it on any device and the container joins); with one it's non-interactive.
+Already-registered or tailscale-less containers are skipped silently.
 
 Control the prompt:
 

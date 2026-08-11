@@ -281,12 +281,15 @@ def tailscale_state(container_id):
 
 
 def _prompt_tailscale():
-    """Ask the user (only when stdin is interactive)."""
+    """Ask the user (only when stdin is interactive). Y is the default —
+    the prompt only appears when the container has tailscale and is logged
+    out, i.e. registering is almost always the intent. Ctrl-C still skips.
+    """
     try:
         if not sys.stdin.isatty():
             return False
-        answer = input("Register this container on Tailscale? [y/N] ").strip().lower()
-        return answer in ("y", "yes")
+        answer = input("Register this container on Tailscale? [Y/n] ").strip().lower()
+        return answer not in ("n", "no")
     except (EOFError, KeyboardInterrupt):
         print()
         return False

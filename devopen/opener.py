@@ -258,7 +258,67 @@ def open_in_vscode(container_id, workspace_folder, on_log=log_stdout):
     return uri
 
 
-def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout):
+def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
+    """Best-effort registration of the container on Tailscale (optional).
+
+    Runs `tailscale up` inside the container. With an authkey this is
+    non-interactive; without one, tailscale prints a login URL that you open
+    in a browser (state then persists in the container's tailscale volume, so
+    future container recreations — e.g. devopen's --remove-existing-container —
+    stay registered automatically).
+
+    Returns True if connected/skipped-already, False if it failed.
+    """
+    def exec_in(cmd):
+        return subprocess.run(
+            ["docker", "exec", "-u", "root", container_id] + cmd,
+            capture_output=True, text=True, timeout=30,
+        )
+
+    # Wait briefly for the tailscale binary + daemon (postCreate starts it).
+    deadline = time.monotonic() + 30
+    ready = False
+    while time.monotonic() < deadline:
+        r = exec_in(["sh", "-c", "command -v tailscale >/dev/null 2>&1 && pgrep -x tailscaled >/dev/null 2>&1"])
+        if r.returncode == 0:
+            ready = True
+            break
+        time.sleep(2)
+    if not ready:
+        on_log("[devopen] tailscale: not available in this container — skipping.")
+        return False
+
+    r = exec_in(["tailscale", "status"])
+    if r.returncode == 0 and "Logged out" not in r.stdout and r.stdout.strip():
+        on_log(f"[devopen] tailscale: already connected ({r.stdout.strip().splitlines()[0]}).")
+        return True
+
+    on_log(f"[devopen] tailscale: registering on the tailnet as '{hostname}'…")
+    cmd = ["tailscale", "up", "--hostname=" + hostname]
+    if authkey:
+        cmd.append("--authkey=" + authkey)
+        on_log("[devopen] tailscale: using authkey (non-interactive).")
+    else:
+        on_log("[devopen] tailscale: no authkey — a login URL will appear below; open it in a browser.")
+
+    proc = subprocess.Popen(
+        ["docker", "exec", "-u", "root", container_id] + cmd,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+    )
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line:
+            on_log(line)
+    rc = proc.wait()
+    if rc != 0:
+        on_log(f"[devopen] tailscale: 'tailscale up' failed (exit {rc}).")
+        return False
+    on_log("[devopen] tailscale: registered ✓")
+    return True
+
+
+def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
+              tailscale=False, tailscale_authkey=None, tailscale_hostname=None):
     """Full open flow. Returns the vscode-remote URI on success."""
     repo_url = normalize_repo(repo_url)
     if not repo_url:
@@ -274,5 +334,12 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout):
     container_id = _devcontainer_up(folder, on_log=on_log)
     on_log(f"Container ready: {container_id}")
     uri = open_in_vscode(container_id, folder, on_log=on_log)
+    if tailscale:
+        tailscale_up(
+            container_id,
+            hostname=tailscale_hostname or repo_dir_name(repo_url),
+            authkey=tailscale_authkey,
+            on_log=on_log,
+        )
     on_log("Done.")
     return uri

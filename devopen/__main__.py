@@ -117,6 +117,18 @@ def main(argv=None):
         "--workspaces-dir", default=None,
         help="Override the workspaces directory (default from ~/.devopen/config.json)",
     )
+    parser.add_argument(
+        "--tailscale", action="store_true",
+        help="Register the container on Tailscale after opening (hostname = repo name)",
+    )
+    parser.add_argument(
+        "--authkey", default=None,
+        help="Tailscale authkey (default: DEVOPEN_TAILSCALE_AUTHKEY env or config 'tailscale_authkey')",
+    )
+    parser.add_argument(
+        "--hostname", default=None,
+        help="Tailscale hostname (default: repo name)",
+    )
     args = parser.parse_args(argv)
 
     repo = args.repo
@@ -126,8 +138,14 @@ def main(argv=None):
             workspaces_dir = config.load()["workspaces_dir"]
         repo = _interactive_pick(workspaces_dir)
 
+    cfg = config.load()
+    authkey = args.authkey or os.environ.get("DEVOPEN_TAILSCALE_AUTHKEY") or cfg.get("tailscale_authkey")
     try:
-        open_repo(repo, branch=args.branch, workspaces_dir=workspaces_dir)
+        open_repo(
+            repo, branch=args.branch, workspaces_dir=workspaces_dir,
+            tailscale=args.tailscale, tailscale_authkey=authkey,
+            tailscale_hostname=args.hostname,
+        )
         return 0
     except DevopenError as e:
         print(f"[devopen] ERROR: {e}", file=sys.stderr)

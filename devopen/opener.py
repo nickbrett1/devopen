@@ -1,5 +1,6 @@
 """Core devopen logic: clone -> devcontainer up -> open VS Code window."""
 
+import json
 import os
 import re
 import shutil
@@ -161,8 +162,40 @@ def _devcontainer_up(workspace_folder, on_log=log_stdout):
     return container_id
 
 
-def _container_workspace_path(container_id, fallback_name):
-    """Path of the workspace *inside* the container (for the vscode-remote URI)."""
+def _devcontainer_workspace_folder(local_folder):
+    """workspaceFolder from the repo's devcontainer config, if declared.
+
+    This is the path of the workspace *inside* the container. Using the
+    image's WorkingDir instead is wrong for images like node (WORKDIR is
+    /home/node, but the repo lives at /workspaces/<name>), and a bogus
+    in-container path makes VS Code's Dev Containers extension fail to
+    resolve the folder (it can even surface as "docker: command not found"
+    because the extension spawns docker with the bad path as its cwd).
+    """
+    candidates = [
+        os.path.join(local_folder, ".devcontainer", "devcontainer.json"),
+        os.path.join(local_folder, ".devcontainer.json"),
+    ]
+    for path in candidates:
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            wf = cfg.get("workspaceFolder")
+            if wf:
+                return wf
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def _container_workspace_path(container_id, local_folder):
+    fallback_name = os.path.basename(local_folder)
+    wf = _devcontainer_workspace_folder(local_folder)
+    if wf:
+        return wf
+    # Fallback: the container's WorkingDir, then the devcontainer CLI default.
     try:
         r = subprocess.run(
             ["docker", "inspect", "-f", "{{.Config.WorkingDir}}", container_id],
@@ -177,7 +210,7 @@ def _container_workspace_path(container_id, fallback_name):
 
 
 def open_in_vscode(container_id, workspace_folder, on_log=log_stdout):
-    workspace_path = _container_workspace_path(container_id, os.path.basename(workspace_folder))
+    workspace_path = _container_workspace_path(container_id, workspace_folder)
     uri = f"vscode-remote://dev-container+{container_id}{workspace_path}"
     on_log(f"Opening VS Code window: {uri}")
     subprocess.Popen(["code", "--new-window", "--folder-uri", uri])

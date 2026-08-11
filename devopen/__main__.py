@@ -118,8 +118,12 @@ def main(argv=None):
         help="Override the workspaces directory (default from ~/.devopen/config.json)",
     )
     parser.add_argument(
-        "--tailscale", action="store_true",
-        help="Register the container on Tailscale after opening (hostname = repo name)",
+        "--tailscale", dest="tailscale", action="store_const", const=True, default=None,
+        help="Always register the container on Tailscale (no prompt)",
+    )
+    parser.add_argument(
+        "--no-tailscale", dest="tailscale", action="store_const", const=False,
+        help="Never register on Tailscale / suppress the prompt",
     )
     parser.add_argument(
         "--authkey", default=None,

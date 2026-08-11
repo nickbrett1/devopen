@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 
@@ -258,6 +259,39 @@ def open_in_vscode(container_id, workspace_folder, on_log=log_stdout):
     return uri
 
 
+def tailscale_state(container_id):
+    """Best-effort probe: 'connected' | 'logged_out' | 'absent'."""
+    try:
+        r = subprocess.run(
+            ["docker", "exec", "-u", "root", container_id, "sh", "-c",
+             "command -v tailscale >/dev/null 2>&1 && pgrep -x tailscaled >/dev/null 2>&1"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode != 0:
+            return "absent"
+        r = subprocess.run(
+            ["docker", "exec", "-u", "root", container_id, "tailscale", "status"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0 and "Logged out" not in r.stdout and r.stdout.strip():
+            return "connected"
+        return "logged_out"
+    except Exception:
+        return "absent"
+
+
+def _prompt_tailscale():
+    """Ask the user (only when stdin is interactive)."""
+    try:
+        if not sys.stdin.isatty():
+            return False
+        answer = input("Register this container on Tailscale? [y/N] ").strip().lower()
+        return answer in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
 def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
     """Best-effort registration of the container on Tailscale (optional).
 
@@ -318,8 +352,12 @@ def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
 
 
 def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
-              tailscale=False, tailscale_authkey=None, tailscale_hostname=None):
-    """Full open flow. Returns the vscode-remote URI on success."""
+              tailscale=None, tailscale_authkey=None, tailscale_hostname=None):
+    """Full open flow. Returns the vscode-remote URI on success.
+
+    tailscale: True = always register; False = never; None = ask on the CLI
+    (only when the container has tailscale and is logged out).
+    """
     repo_url = normalize_repo(repo_url)
     if not repo_url:
         raise DevopenError("repo URL is required.")
@@ -334,12 +372,19 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     container_id = _devcontainer_up(folder, on_log=on_log)
     on_log(f"Container ready: {container_id}")
     uri = open_in_vscode(container_id, folder, on_log=on_log)
-    if tailscale:
-        tailscale_up(
-            container_id,
-            hostname=tailscale_hostname or repo_dir_name(repo_url),
-            authkey=tailscale_authkey,
-            on_log=on_log,
-        )
+    hostname = tailscale_hostname or repo_dir_name(repo_url)
+    if tailscale is True:
+        tailscale_up(container_id, hostname, authkey=tailscale_authkey, on_log=on_log)
+    elif tailscale is None:
+        state = tailscale_state(container_id)
+        if state == "connected":
+            on_log(f"[devopen] tailscale: already connected as '{hostname}'.")
+        elif state == "logged_out":
+            on_log("[devopen] tailscale: container has tailscale but is not registered.")
+            if _prompt_tailscale():
+                tailscale_up(container_id, hostname, authkey=tailscale_authkey, on_log=on_log)
+            else:
+                on_log("[devopen] tailscale: skipped (use --tailscale to register, --no-tailscale to silence).")
+        # 'absent' → silently skip
     on_log("Done.")
     return uri

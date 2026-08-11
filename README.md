@@ -102,26 +102,37 @@ Pick a repo to open:
 Workspaces and GitHub repos are each sorted alphabetically (case-insensitive)
 so the list is easy to scan.
 
-### Tailscale registration (optional)
+### Tailscale registration
 
 Some devcontainers join your tailnet (e.g. genproj projects with a
-`scripts/cloud_login.sh`). devopen can do that registration right after the
-container is up:
+`scripts/cloud_login.sh`). When you open a repo whose container has tailscale
+but isn't registered yet, devopen **asks** you after the window opens:
+
+```
+[devopen] tailscale: container has tailscale but is not registered.
+Register this container on Tailscale? [y/N]
+```
+
+Say `y` and devopen runs `tailscale up` inside the container — without an
+authkey it streams the `login.tailscale.com/a/...` URL (open it on any device
+and the container joins); with one it's non-interactive. Already-registered or
+tailscale-less containers are skipped silently.
+
+Control the prompt:
 
 ```bash
-devopen --tailscale nickbrett1/parquet-peek            # prints a login URL → open it in a browser
-devopen --tailscale --authkey tskey-... parquet-peek   # non-interactive
-devopen --tailscale -b feature/x parquet-peek          # works with any other flags
+devopen --tailscale nickbrett1/parquet-peek            # always register, never ask
+devopen --no-tailscale parquet-peek                    # never register, never ask
+devopen --tailscale --authkey tskey-... parquet-peek   # non-interactive registration
 ```
 
 - **hostname** defaults to the repo name (`parquet-peek`); override with `--hostname`.
 - **authkey** comes from `--authkey`, the `DEVOPEN_TAILSCALE_AUTHKEY` env var,
   or `"tailscale_authkey"` in `~/.devopen/config.json` (the file is mode 600).
-  Without one, devopen streams the `login.tailscale.com/a/...` URL and waits —
-  open it on any device and the container joins.
 - **State persists:** the auth lives in the container's `tailscale` volume, so
   once registered, later devopen opens (which recreate the container via
-  `--remove-existing-container`) come back on the tailnet automatically.
+  `--remove-existing-container`) come back on the tailnet automatically —
+  no prompt, no flag.
 
 ### From Blink on your iPhone
 

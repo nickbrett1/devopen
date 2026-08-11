@@ -133,6 +133,10 @@ def main(argv=None):
         "--hostname", default=None,
         help="Tailscale hostname (default: repo name)",
     )
+    parser.add_argument(
+        "--fresh", action="store_true",
+        help="Force a fresh container: remove + rebuild instead of reusing an existing one",
+    )
     args = parser.parse_args(argv)
 
     repo = args.repo
@@ -148,7 +152,7 @@ def main(argv=None):
         open_repo(
             repo, branch=args.branch, workspaces_dir=workspaces_dir,
             tailscale=args.tailscale, tailscale_authkey=authkey,
-            tailscale_hostname=args.hostname,
+            tailscale_hostname=args.hostname, fresh=args.fresh,
         )
         return 0
     except DevopenError as e:

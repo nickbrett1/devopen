@@ -210,6 +210,32 @@ def _container_workspace_path(container_id, local_folder):
     return f"/workspaces/{fallback_name}"
 
 
+def _find_existing_container(local_folder):
+    """Full id of the newest existing container for this workspace folder
+    (created by devopen or the Dev Containers extension, which both label
+    containers with devcontainer.local_folder), or None."""
+    try:
+        r = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", f"label=devcontainer.local_folder={local_folder}"],
+            capture_output=True, text=True, timeout=15,
+        )
+        lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+        return lines[0] if lines else None  # docker ps -a lists newest first
+    except Exception:
+        return None
+
+
+def _container_running(container_id):
+    try:
+        r = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container_id],
+            capture_output=True, text=True, timeout=15,
+        )
+        return r.stdout.strip() == "true"
+    except Exception:
+        return False
+
+
 def _docker_context_name():
     try:
         r = subprocess.run(["docker", "context", "show"], capture_output=True, text=True, timeout=10)
@@ -261,23 +287,39 @@ def open_in_vscode(container_id, workspace_folder, on_log=log_stdout):
 
 def tailscale_state(container_id):
     """Best-effort probe: 'connected' | 'logged_out' | 'absent'."""
-    try:
-        r = subprocess.run(
-            ["docker", "exec", "-u", "root", container_id, "sh", "-c",
-             "command -v tailscale >/dev/null 2>&1 && pgrep -x tailscaled >/dev/null 2>&1"],
-            capture_output=True, text=True, timeout=15,
-        )
-        if r.returncode != 0:
-            return "absent"
-        r = subprocess.run(
-            ["docker", "exec", "-u", "root", container_id, "tailscale", "status"],
-            capture_output=True, text=True, timeout=15,
-        )
-        if r.returncode == 0 and "Logged out" not in r.stdout and r.stdout.strip():
+    def exec_in(cmd):
+        try:
+            return subprocess.run(
+                ["docker", "exec", "-u", "root", container_id] + cmd,
+                capture_output=True, text=True, timeout=15,
+            )
+        except Exception:
+            return None
+
+    # tailscale binary present at all?
+    r = exec_in(["sh", "-c", "command -v tailscale >/dev/null 2>&1"])
+    if not r or r.returncode != 0:
+        return "absent"
+
+    # Ensure the daemon is up — plain `docker start` doesn't run postStart,
+    # which is what normally starts tailscaled.
+    exec_in(["sh", "-c",
+             "pgrep -x tailscaled >/dev/null 2>&1 || "
+             "(sudo start-stop-daemon --start --background --oknodo "
+             "--pidfile /var/run/tailscaled.pid --make-pidfile "
+             "--exec /usr/sbin/tailscaled -- --state=/var/lib/tailscale/tailscaled.state)"])
+    for _ in range(5):  # daemon may take a second to come up
+        r = exec_in(["tailscale", "status"])
+        if r is None:
+            break
+        out = (r.stdout or "") + (r.stderr or "")
+        if "failed to connect to local tailscaled" in out:
+            time.sleep(1)
+            continue
+        if r.returncode == 0 and "Logged out" not in out and r.stdout.strip():
             return "connected"
         return "logged_out"
-    except Exception:
-        return "absent"
+    return "logged_out"
 
 
 def _prompt_tailscale():
@@ -374,7 +416,9 @@ def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
         )
 
     # Wait briefly for the tailscale binary + daemon (postCreate starts it).
-    # If the container was stopped (e.g. its VS Code window closed), start it.
+    # If the container was stopped (e.g. its VS Code window closed), start it
+    # and bring the daemon up ourselves (plain `docker start` doesn't run
+    # postStart, which is what normally starts tailscaled).
     deadline = time.monotonic() + 30
     ready = False
     while time.monotonic() < deadline:
@@ -383,6 +427,12 @@ def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
             ready = True
             break
         subprocess.run(["docker", "start", container_id], capture_output=True, text=True, timeout=30)
+        exec_in(["sh", "-c",
+                 "command -v tailscaled >/dev/null 2>&1 && "
+                 "(pgrep -x tailscaled >/dev/null 2>&1 || "
+                 "sudo start-stop-daemon --start --background --oknodo "
+                 "--pidfile /var/run/tailscaled.pid --make-pidfile "
+                 "--exec /usr/sbin/tailscaled -- --state=/var/lib/tailscale/tailscaled.state)"])
         time.sleep(2)
     if not ready:
         on_log("[devopen] tailscale: not available in this container — skipping.")
@@ -418,7 +468,8 @@ def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
 
 
 def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
-              tailscale=None, tailscale_authkey=None, tailscale_hostname=None):
+              tailscale=None, tailscale_authkey=None, tailscale_hostname=None,
+              fresh=False):
     """Full open flow. Returns the vscode-remote URI on success.
 
     tailscale: True = always register; False = never; None = ask on the CLI
@@ -434,9 +485,21 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     ensure_docker(on_log=on_log)
     ensure_devcontainer_cli(on_log=on_log)
     folder = clone_or_update(workspaces_dir, repo_url, branch, on_log=on_log)
-    on_log(f"Running devcontainer up on {folder} (first build can take minutes)…")
-    container_id = _devcontainer_up(folder, on_log=on_log)
-    on_log(f"Container ready: {container_id}")
+    # Smart reuse: if a container already exists for this workspace, start/reuse
+    # it instead of rebuilding (fast reopen, keeps tailscale state + host keys).
+    # Use --fresh to force the old remove-and-rebuild behaviour.
+    existing = None if fresh else _find_existing_container(folder)
+    if existing:
+        if _container_running(existing):
+            on_log(f"[devopen] reusing running container {existing[:12]} (no rebuild).")
+        else:
+            on_log(f"[devopen] existing container {existing[:12]} is stopped — starting it.")
+            subprocess.run(["docker", "start", existing], capture_output=True, text=True, timeout=60)
+        container_id = existing
+    else:
+        on_log(f"Running devcontainer up on {folder} (first build can take minutes)…")
+        container_id = _devcontainer_up(folder, on_log=on_log)
+        on_log(f"Container ready: {container_id}")
     hostname = tailscale_hostname or repo_dir_name(repo_url)
     # Register BEFORE opening the window: the Dev Containers extension stops
     # the container when its window closes, which would make the registration

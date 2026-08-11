@@ -143,6 +143,29 @@ devopen --tailscale --authkey tskey-... parquet-peek   # non-interactive registr
   shutdown behavior) — keep the window open (or restart the container) when
   you want to mosh in from away.
 
+### Smart container reuse
+
+devopen checks for an existing container for the workspace before building:
+
+- **none** → full build (`devcontainer up --remove-existing-container`)
+- **running** → reused as-is (no rebuild, instant)
+- **stopped** (e.g. its VS Code window was closed — that stops the container) →
+  started again, with `tailscaled` + `sshd` + host keys brought back up
+
+Reuse is fast and keeps the tailscale registration and SSH host keys (they live
+in the workspace's volumes). So after the window was closed, this is all it
+takes to be mosh-ready again:
+
+```bash
+ssh mac-studio devopen nickbrett1/parquet-peek   # starts container + services, prints mosh command
+```
+
+Force the old remove-and-rebuild behaviour with `--fresh`:
+
+```bash
+devopen --fresh nickbrett1/parquet-peek
+```
+
 ### From Blink on your iPhone
 
 The repo is just a command-line argument — type the URL, or the shorter

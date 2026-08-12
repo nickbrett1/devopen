@@ -133,12 +133,14 @@ def clone_or_update(workspaces_dir, repo_url, branch, on_log=log_stdout):
 # Devcontainer + VS Code
 # --------------------------------------------------------------------------
 
-def _devcontainer_up(workspace_folder, on_log=log_stdout):
+def _devcontainer_up(workspace_folder, on_log=log_stdout, no_cache=False):
     cmd = [
         "devcontainer", "up",
         "--workspace-folder", workspace_folder,
         "--remove-existing-container",
     ]
+    if no_cache:
+        cmd.append("--build-no-cache")
     on_log("$ " + " ".join(cmd))
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -487,7 +489,7 @@ def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
 
 def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
               tailscale=None, tailscale_authkey=None, tailscale_hostname=None,
-              fresh=False):
+              fresh=False, clean=False):
     """Full open flow. Returns the vscode-remote URI on success.
 
     tailscale: True = always register; False = never; None = ask on the CLI
@@ -507,7 +509,7 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     # to rebuild (interactive only; default N = reuse) unless --fresh was passed,
     # then start/reuse it instead of rebuilding (fast reopen, keeps tailscale
     # state + host keys).
-    existing = None if fresh else _find_existing_container(folder)
+    existing = None if (fresh or clean) else _find_existing_container(folder)
     if existing and not _prompt_rebuild(existing):
         if _container_running(existing):
             on_log(f"[devopen] reusing running container {existing[:12]} (no rebuild).")
@@ -518,8 +520,10 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     else:
         if existing:
             on_log(f"[devopen] rebuilding container for {folder}…")
+        if clean:
+            on_log("[devopen] clean rebuild: building image with --no-cache (Docker layer cache skipped).")
         on_log(f"Running devcontainer up on {folder} (first build can take minutes)…")
-        container_id = _devcontainer_up(folder, on_log=on_log)
+        container_id = _devcontainer_up(folder, on_log=on_log, no_cache=clean)
         on_log(f"Container ready: {container_id}")
     hostname = tailscale_hostname or repo_dir_name(repo_url)
     # Register BEFORE opening the window: the Dev Containers extension stops

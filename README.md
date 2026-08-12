@@ -171,6 +171,28 @@ tailscale/SSH state survives. Force a rebuild with no prompt via `--fresh`:
 devopen --fresh nickbrett1/parquet-peek
 ```
 
+### Clean rebuilds (no cache)
+
+Rebuilds (`--fresh` or answering `y` to the prompt) remove the container but
+still build the image **with Docker's layer cache** — stale cached layers are
+reused when their inputs are unchanged. If you suspect something stale in the
+image itself (old `npm ci`/`apt` results baked into a layer, etc.), use
+`--clean`, which passes `--build-no-cache` to `devcontainer up`:
+
+```bash
+devopen --clean nickbrett1/parquet-peek
+```
+
+`--clean` implies a rebuild (no prompt). It keeps the bind-mounted workspace
+and named volumes, so tailscale/SSH state survives — but **host-side files in
+the workspace (e.g. `node_modules` on the host bind mount) are NOT touched**.
+If stale dependencies are the suspect, also remove them from the host:
+
+```bash
+rm -rf ~/DevOpen/workspaces/parquet-peek/node_modules
+devopen --clean nickbrett1/parquet-peek
+```
+
 ### From Blink on your iPhone
 
 The repo is just a command-line argument — type the URL, or the shorter

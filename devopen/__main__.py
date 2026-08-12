@@ -137,6 +137,12 @@ def main(argv=None):
         "--fresh", action="store_true",
         help="Force a fresh container: remove + rebuild instead of reusing an existing one (no prompt)",
     )
+    parser.add_argument(
+        "--clean", action="store_true",
+        help="Clean rebuild: remove the container and rebuild the image with --no-cache "
+             "(skips Docker layer cache). Workspace files and named volumes persist "
+             "(node_modules in the workspace is NOT touched)",
+    )
     args = parser.parse_args(argv)
 
     repo = args.repo
@@ -152,7 +158,7 @@ def main(argv=None):
         open_repo(
             repo, branch=args.branch, workspaces_dir=workspaces_dir,
             tailscale=args.tailscale, tailscale_authkey=authkey,
-            tailscale_hostname=args.hostname, fresh=args.fresh,
+            tailscale_hostname=args.hostname, fresh=args.fresh, clean=args.clean,
         )
         return 0
     except DevopenError as e:

@@ -107,6 +107,81 @@ def repo_dir_name(repo_url):
     return name[:-4] if name.endswith(".git") else name
 
 
+def _prompt_rebase(local_count=""):
+    """Ask whether to rebase local commits onto origin (interactive only).
+
+    Default is N — devopen must never rewrite history without consent.
+    Non-interactive runs (plain ssh, scripts, HTTP server) skip the prompt
+    and continue with the local state.
+    """
+    try:
+        if not sys.stdin.isatty():
+            return False
+        suffix = ""
+        if local_count:
+            noun = "commit" if local_count == "1" else "commits"
+            suffix = f" ({local_count} local {noun} not on origin)"
+        answer = input(f"[devopen] local branch diverged{suffix} — rebase onto origin? [y/N] ").strip().lower()
+        return answer in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
+def _ff_pull_or_rebase(dest, on_log=log_stdout):
+    """Update the workspace without hard-failing on divergence.
+
+    Tries `git pull --ff-only` first. If the local branch has diverged
+    (local commits not on origin), offer an interactive rebase (preserves
+    the local commits, autostash protects uncommitted changes); otherwise
+    warn and continue with the local state so the container still opens.
+    Returns True if the workspace is up to date with origin, False if it
+    is running on diverged local state.
+    """
+    r = subprocess.run(["git", "-C", dest, "pull", "--ff-only"], capture_output=True, text=True)
+    for line in (r.stdout or "").splitlines():
+        on_log(line)
+    if r.returncode != 0:
+        for line in (r.stderr or "").splitlines():
+            on_log(line)
+        if not (r.stdout or "").strip() and not (r.stderr or "").strip():
+            on_log(f"[devopen] git pull --ff-only failed (exit {r.returncode}).")
+    if r.returncode == 0:
+        return True
+
+    count = ""
+    try:
+        c = subprocess.run(
+            ["git", "-C", dest, "rev-list", "--count", "@{upstream}..HEAD"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if c.returncode == 0:
+            count = c.stdout.strip()
+    except Exception:
+        pass
+
+    if _prompt_rebase(count):
+        on_log(f"[devopen] rebasing {count or 'local'} commit(s) onto origin (autostash)…")
+        r2 = subprocess.run(
+            ["git", "-C", dest, "pull", "--rebase", "--autostash"],
+            capture_output=True, text=True,
+        )
+        for line in (r2.stdout or "").splitlines():
+            on_log(line)
+        if r2.returncode != 0:
+            for line in (r2.stderr or "").splitlines():
+                on_log(line)
+        if r2.returncode == 0:
+            on_log("[devopen] rebase complete.")
+            return True
+        subprocess.run(["git", "-C", dest, "rebase", "--abort"], capture_output=True, text=True)
+        on_log("[devopen] rebase failed (conflicts?) — aborted; continuing with local state.")
+    else:
+        on_log("[devopen] local branch has diverged from origin — continuing with local state "
+               "(run 'git pull --rebase' in the workspace to sync).")
+    return False
+
+
 def clone_or_update(workspaces_dir, repo_url, branch, on_log=log_stdout):
     """Clone the repo into workspaces_dir, or fetch/checkout if it exists."""
     os.makedirs(workspaces_dir, exist_ok=True)
@@ -123,9 +198,7 @@ def clone_or_update(workspaces_dir, repo_url, branch, on_log=log_stdout):
         _run(["git", "-C", dest, "fetch", "--all", "--prune"], on_log=on_log)
         if branch:
             _run(["git", "-C", dest, "checkout", branch], on_log=on_log)
-            _run(["git", "-C", dest, "pull", "--ff-only"], on_log=on_log)
-        else:
-            _run(["git", "-C", dest, "pull", "--ff-only"], on_log=on_log)
+        _ff_pull_or_rebase(dest, on_log=on_log)
     return dest
 
 

@@ -162,6 +162,21 @@ phone/automation flow is never blocked. Use `-t` when you want the prompt:
 ssh -t mac-studio devopen nickbrett1/parquet-peek   # asks: rebuild? [y/N]
 ```
 
+### Diverged local branch
+
+If the workspace has local commits that origin doesn't (e.g. the same fix
+committed from two machines), `git pull --ff-only` can't fast-forward and
+devopen used to hard-fail. Now it:
+
+- **interactive terminal** → asks `local branch diverged (N local commits
+  not on origin) — rebase onto origin? [y/N]`; `y` replays your local
+  commits on top of origin via `git pull --rebase --autostash` (uncommitted
+  changes survive too). If the rebase conflicts, it aborts safely and
+  continues with your local state.
+- **non-interactive** (plain `ssh`, scripts, HTTP server) → never rewrites
+  history silently: it warns and opens the container with your local state.
+  Run `git pull --rebase` in the workspace when you want to sync.
+
 Reuse is fast and keeps the tailscale registration and SSH host keys (they live
 in the workspace's volumes). A rebuild recreates the container from the
 Dockerfile but keeps the bind-mounted workspace and named volumes, so

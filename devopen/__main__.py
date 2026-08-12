@@ -135,7 +135,7 @@ def main(argv=None):
     )
     parser.add_argument(
         "--fresh", action="store_true",
-        help="Force a fresh container: remove + rebuild instead of reusing an existing one",
+        help="Force a fresh container: remove + rebuild instead of reusing an existing one (no prompt)",
     )
     args = parser.parse_args(argv)
 

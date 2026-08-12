@@ -337,6 +337,24 @@ def _prompt_tailscale():
         return False
 
 
+def _prompt_rebuild(container_id):
+    """Ask whether to rebuild an existing container (only on interactive
+    stdin). Default is N — reuse — so scripted/ssh-without-tty runs are
+    never blocked; --fresh still forces a rebuild with no prompt. A rebuild
+    recreates the container from the Dockerfile; the bind-mounted workspace
+    and named volumes survive, so tailscale registration + SSH host keys
+    persist.
+    """
+    try:
+        if not sys.stdin.isatty():
+            return False
+        answer = input(f"[devopen] existing container {container_id[:12]} found — rebuild it? [y/N] ").strip().lower()
+        return answer in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
 def _ensure_ssh_hostkeys_and_sshd(container_id, on_log=log_stdout):
     """Idempotent re-run of the postCreate SSH host-key restore/backup step
     (mirrors post-create-setup.sh), plus sshd — guarantees mosh/ssh into the
@@ -485,11 +503,12 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     ensure_docker(on_log=on_log)
     ensure_devcontainer_cli(on_log=on_log)
     folder = clone_or_update(workspaces_dir, repo_url, branch, on_log=on_log)
-    # Smart reuse: if a container already exists for this workspace, start/reuse
-    # it instead of rebuilding (fast reopen, keeps tailscale state + host keys).
-    # Use --fresh to force the old remove-and-rebuild behaviour.
+    # Smart reuse: if a container already exists for this workspace, ask whether
+    # to rebuild (interactive only; default N = reuse) unless --fresh was passed,
+    # then start/reuse it instead of rebuilding (fast reopen, keeps tailscale
+    # state + host keys).
     existing = None if fresh else _find_existing_container(folder)
-    if existing:
+    if existing and not _prompt_rebuild(existing):
         if _container_running(existing):
             on_log(f"[devopen] reusing running container {existing[:12]} (no rebuild).")
         else:
@@ -497,6 +516,8 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
             subprocess.run(["docker", "start", existing], capture_output=True, text=True, timeout=60)
         container_id = existing
     else:
+        if existing:
+            on_log(f"[devopen] rebuilding container for {folder}…")
         on_log(f"Running devcontainer up on {folder} (first build can take minutes)…")
         container_id = _devcontainer_up(folder, on_log=on_log)
         on_log(f"Container ready: {container_id}")

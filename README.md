@@ -148,19 +148,24 @@ devopen --tailscale --authkey tskey-... parquet-peek   # non-interactive registr
 devopen checks for an existing container for the workspace before building:
 
 - **none** → full build (`devcontainer up --remove-existing-container`)
-- **running** → reused as-is (no rebuild, instant)
-- **stopped** (e.g. its VS Code window was closed — that stops the container) →
-  started again, with `tailscaled` + `sshd` + host keys brought back up
+- **existing** → asks `rebuild it? [y/N]` on an interactive terminal, then
+  either rebuilds (y) or reuses (default) — running containers are reused
+  as-is (instant), stopped ones (e.g. its VS Code window was closed — that
+  stops the container) are started again, with `tailscaled` + `sshd` + host
+  keys brought back up
 
-Reuse is fast and keeps the tailscale registration and SSH host keys (they live
-in the workspace's volumes). So after the window was closed, this is all it
-takes to be mosh-ready again:
+The prompt only appears on an interactive terminal — over plain `ssh` (no
+`-t`), from scripts, or via the HTTP server it silently reuses, so the
+phone/automation flow is never blocked. Use `-t` when you want the prompt:
 
 ```bash
-ssh mac-studio devopen nickbrett1/parquet-peek   # starts container + services, prints mosh command
+ssh -t mac-studio devopen nickbrett1/parquet-peek   # asks: rebuild? [y/N]
 ```
 
-Force the old remove-and-rebuild behaviour with `--fresh`:
+Reuse is fast and keeps the tailscale registration and SSH host keys (they live
+in the workspace's volumes). A rebuild recreates the container from the
+Dockerfile but keeps the bind-mounted workspace and named volumes, so
+tailscale/SSH state survives. Force a rebuild with no prompt via `--fresh`:
 
 ```bash
 devopen --fresh nickbrett1/parquet-peek

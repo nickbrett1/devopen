@@ -10,6 +10,7 @@ Strategy (best-effort, no setup required):
 API calls go through `curl` so they work even under a Python without SSL.
 """
 
+import os
 import subprocess
 
 GITHUB_API = "https://api.github.com"
@@ -18,10 +19,18 @@ GITHUB_API = "https://api.github.com"
 def _keychain_token():
     """Return the GitHub PAT stored in the macOS keychain, or None."""
     try:
+        env = dict(os.environ)
+        # `git credential fill` falls back to an interactive username/password
+        # prompt on the terminal when no credential is stored, which blocks the
+        # repo picker for the full timeout below. Disable prompts so the lookup
+        # is silent: keychain hit -> token; miss -> return None immediately and
+        # fall back to the unauthenticated API in list_repos().
+        env["GIT_TERMINAL_PROMPT"] = "0"
         r = subprocess.run(
             ["git", "credential", "fill"],
             input="protocol=https\nhost=github.com\n\n",
             capture_output=True, text=True, timeout=10,
+            env=env,
         )
         if r.returncode != 0:
             return None

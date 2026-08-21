@@ -571,9 +571,18 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     repo_url = normalize_repo(repo_url)
     if not repo_url:
         raise DevopenError("repo URL is required.")
+    from . import config
+    cfg = config.load()
     if not workspaces_dir:
-        from . import config
-        workspaces_dir = config.load()["workspaces_dir"]
+        workspaces_dir = cfg["workspaces_dir"]
+    # A bare repo name (e.g. `devopen pshelf`, no scheme and no "owner/" prefix)
+    # resolves to the configured GitHub account, mirroring how the interactive
+    # picker expands its entries to full URLs. Pass an explicit `owner/repo` or
+    # full URL if the repo isn't under the default account.
+    if "/" not in repo_url and not repo_url.startswith(
+            ("http://", "https://", "git@", "ssh://", "git://")):
+        username = cfg.get("github_username") or "nickbrett1"
+        repo_url = f"https://github.com/{username}/{repo_url}.git"
 
     ensure_docker(on_log=on_log)
     ensure_devcontainer_cli(on_log=on_log)

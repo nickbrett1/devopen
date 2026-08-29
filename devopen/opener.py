@@ -477,6 +477,24 @@ def _tailnet_ip(container_id):
     return None
 
 
+def _tailnet_dnsname(container_id):
+    """The container's MagicDNS name (e.g. 'stripe-toddler' or
+    'stripe-toddler.<tailnet>.ts.net'), or None."""
+    try:
+        r = subprocess.run(
+            ["docker", "exec", "-u", "root", container_id, "tailscale", "status", "--json"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            dns = ((json.loads(r.stdout) or {}).get("Self") or {}).get("DNSName") or ""
+            dns = dns.rstrip(".")
+            if dns:
+                return dns
+    except Exception:
+        pass
+    return None
+
+
 def _remote_user(local_folder):
     """remoteUser from the repo's devcontainer config (default 'root')."""
     import json as _json
@@ -489,6 +507,20 @@ def _remote_user(local_folder):
             except (OSError, ValueError):
                 break
     return "root"
+
+
+def blink_url(host, username, key=None, port=22):
+    """Build a Blink Shell deep-link that adds/opens a host.
+
+    Format: blink://host/?host=HOST&username=USER&key=KEY&port=PORT
+    (param names verified against Blink 3.x; older versions may differ.)
+    """
+    from urllib.parse import quote
+    params = {"host": host, "username": username}
+    if key:
+        params["key"] = key
+    params["port"] = port
+    return "blink://host/?" + "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
 
 
 def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
@@ -562,11 +594,15 @@ def tailscale_up(container_id, hostname, authkey=None, on_log=log_stdout):
 
 def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
               tailscale=None, tailscale_authkey=None, tailscale_hostname=None,
-              fresh=False, clean=False):
+              blink_key=None, fresh=False, clean=False):
     """Full open flow. Returns the vscode-remote URI on success.
 
     tailscale: True = always register; False = never; None = ask on the CLI
     (only when the container has tailscale and is logged out).
+
+    blink_key: name of the SSH key in Blink Shell used for this host. When
+    set (and the container is on the tailnet), devopen prints a
+    `blink://host/?…` deep link that adds the host to Blink on the phone.
     """
     repo_url = normalize_repo(repo_url)
     if not repo_url:
@@ -628,12 +664,21 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
         # 'absent' → silently skip
     if registered:
         # ssh/mosh prep: stable host keys (restore/backup) + sshd, then show
-        # the exact mosh command with the container's tailnet IP.
+        # the exact mosh command with the container's tailnet IP, and — when a
+        # Blink key is configured — a blink://host deep link using the MagicDNS
+        # name (durable across container recreations, unlike the raw IP).
         _ensure_ssh_hostkeys_and_sshd(container_id, on_log=on_log)
         ip = _tailnet_ip(container_id)
         if ip:
             user = _remote_user(folder)
             on_log(f"[devopen] mosh-ready: mosh {user}@{ip}   (ssh {user}@{ip})")
+        dns = _tailnet_dnsname(container_id)
+        if dns and blink_key:
+            user = _remote_user(folder)
+            on_log(f"[devopen] blink-host: {blink_url(dns, user, key=blink_key)}")
+        elif dns:
+            on_log("[devopen] blink-host: set --blink-key (or DEVOPEN_BLINK_KEY) to print a "
+                   "blink://host link to add this container to Blink Shell.")
     uri = open_in_vscode(container_id, folder, on_log=on_log)
     on_log("Done.")
     return uri

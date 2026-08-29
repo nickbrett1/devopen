@@ -128,13 +128,60 @@ def _prompt_rebase(local_count=""):
         return False
 
 
+def _untracked_overwrites(dest, upstream="@{upstream}"):
+    """Untracked files in the working tree that would be clobbered by
+    bringing in `upstream` (tracked there but not locally) — e.g. a
+    locally generated package-lock.json that origin now tracks."""
+    try:
+        changed = subprocess.run(
+            ["git", "-C", dest, "diff", "--name-only", "HEAD", upstream],
+            capture_output=True, text=True, timeout=15,
+        )
+        if changed.returncode != 0:
+            return []
+        incoming = set(changed.stdout.splitlines())
+    except Exception:
+        return []
+    try:
+        untracked = subprocess.run(
+            ["git", "-C", dest, "ls-files", "--others", "--exclude-standard"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if untracked.returncode != 0:
+            return []
+        return sorted(set(untracked.stdout.splitlines()) & incoming)
+    except Exception:
+        return []
+
+
+def _prompt_remove_untracked(files):
+    """Ask whether to delete untracked files that origin now tracks.
+
+    Default is N — devopen never deletes untracked work without consent.
+    """
+    try:
+        if not sys.stdin.isatty():
+            return False
+        print("[devopen] untracked file(s) would be overwritten by origin:")
+        for f in files:
+            print(f"        {f}")
+        answer = input("Remove them and continue? [y/N] ").strip().lower()
+        return answer in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
 def _ff_pull_or_rebase(dest, on_log=log_stdout):
-    """Update the workspace without hard-failing on divergence.
+    """Update the workspace without hard-failing on divergence or collisions.
 
     Tries `git pull --ff-only` first. If the local branch has diverged
     (local commits not on origin), offer an interactive rebase (preserves
-    the local commits, autostash protects uncommitted changes); otherwise
-    warn and continue with the local state so the container still opens.
+    the local commits, autostash protects uncommitted changes). If the pull
+    failed because untracked files would be overwritten by origin (e.g. a
+    locally generated package-lock.json that origin now tracks), offer to
+    remove them and retry. Otherwise warn and continue with the local state
+    so the container still opens.
     Returns True if the workspace is up to date with origin, False if it
     is running on diverged local state.
     """
@@ -148,6 +195,35 @@ def _ff_pull_or_rebase(dest, on_log=log_stdout):
             on_log(f"[devopen] git pull --ff-only failed (exit {r.returncode}).")
     if r.returncode == 0:
         return True
+
+    # Untracked files that origin now tracks would block the pull (autostash
+    # does NOT stash untracked files). Offer to remove them and retry.
+    conflicts = _untracked_overwrites(dest)
+    if conflicts:
+        if _prompt_remove_untracked(conflicts):
+            ok = True
+            for f in conflicts:
+                path = os.path.join(dest, f)
+                on_log(f"[devopen] removing untracked {f}")
+                try:
+                    os.remove(path)
+                except OSError as e:
+                    on_log(f"[devopen] could not remove {f}: {e}")
+                    ok = False
+            if ok:
+                r2 = subprocess.run(["git", "-C", dest, "pull", "--ff-only"], capture_output=True, text=True)
+                for line in (r2.stdout or "").splitlines():
+                    on_log(line)
+                if r2.returncode != 0:
+                    for line in (r2.stderr or "").splitlines():
+                        on_log(line)
+                if r2.returncode == 0:
+                    on_log("[devopen] synced after removing untracked files.")
+                    return True
+        else:
+            on_log("[devopen] untracked files would be overwritten by origin — continuing with local state. "
+                   "Remove them (or run 'git pull --ff-only') to sync.")
+            return False
 
     count = ""
     try:

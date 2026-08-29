@@ -3,23 +3,17 @@
 Config lives at ~/.devopen/config.json (mode 600):
 
     {
-      "token":          "<hex>",           # Bearer token for the HTTP API
-      "install_dir":    "~/DevOpen/devopen",
-      "workspaces_dir": "~/DevOpen/workspaces",
-      "host":           "0.0.0.0",
-      "port":           8797,
-      "blink_key":      "<name>",          # SSH key in Blink Shell (optional)
-      "tailscale_authkey": "<hex>",        # optional, non-interactive registration
+      "install_dir":       "~/DevOpen/devopen",
+      "workspaces_dir":    "~/DevOpen/workspaces",
+      "github_username":   "nickbrett1",
+      "blink_key":         "<name>",        # SSH key in Blink Shell (optional)
+      "tailscale_authkey": "<hex>",         # optional, non-interactive registration
     }
 """
 
 import json
 import os
-import secrets
 
-DEFAULT_HOST = "0.0.0.0"
-# NOTE: 8787 is used by VS Code's Code Helper process, so we use 8797.
-DEFAULT_PORT = 8797
 CONFIG_DIR_NAME = ".devopen"
 CONFIG_FILE_NAME = "config.json"
 
@@ -39,9 +33,6 @@ def _defaults(home=None):
     return {
         "install_dir": os.path.join(devopen_home, "devopen"),
         "workspaces_dir": os.path.join(devopen_home, "workspaces"),
-        "host": DEFAULT_HOST,
-        "port": DEFAULT_PORT,
-        "token": "",
         "github_username": "nickbrett1",
         "blink_key": "",
         "tailscale_authkey": "",
@@ -61,7 +52,7 @@ def save(cfg, home=None):
 
 
 def load(home=None):
-    """Load config, creating a default one (with a fresh token) if missing."""
+    """Load config, creating a default one if missing."""
     cfg = _defaults(home)
     path = config_path(home)
     if os.path.exists(path):
@@ -72,7 +63,5 @@ def load(home=None):
                 cfg.update(data)
         except (OSError, ValueError) as e:
             raise RuntimeError(f"Could not read {path}: {e}") from e
-    if not cfg.get("token"):
-        cfg["token"] = secrets.token_hex(24)
     save(cfg, home=home)
     return cfg

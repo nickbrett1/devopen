@@ -9,9 +9,7 @@ or over SSH from your phone. `devopen`:
 
 Run it bare and it shows an interactive picker of your workspaces plus **all
 your GitHub repos** (private included); run it with an argument and it goes
-straight to work. An optional HTTP server (`install.py --with-server`) adds a
-one-tap URL for iPhone Shortcuts / Safari — but the CLI alone needs nothing
-listening on any port.
+straight to work. It's a pure CLI — nothing listens on a port.
 
 ```
 [terminal / iPhone (Blink)] ──Tailscale──▶ [Mac Studio]
@@ -30,30 +28,20 @@ listening on any port.
 - **Repo picker** (`devopen/repos.py` + CLI): lists already-cloned workspaces,
   then all GitHub repos via the keychain PAT (`git credential fill`), so your
   private repos show up with zero extra setup.
-- **HTTP server** (`devopen/server.py`, *optional*): FastAPI on `0.0.0.0:8797`,
-  installed with `--with-server` (LaunchAgent `com.nick.devopen.plist`).
-- **Config**: `~/.devopen/config.json` (mode 600) — workspaces dir, and the
-  token/host/port for the optional server.
+- **Config**: `~/.devopen/config.json` (mode 600) — workspaces dir.
 
 ## Installation
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nickbrett1/devopen/main/install.py | python3
-# add the optional HTTP server (iPhone one-tap / Shortcut / genproj hook):
-curl -fsSL https://raw.githubusercontent.com/nickbrett1/devopen/main/install.py | python3 - --with-server
 ```
 
 The installer:
 
 1. clones the repo to `~/DevOpen/devopen`
-2. creates a venv and installs `fastapi` + `uvicorn`
-3. installs `/usr/local/bin/devopen` (CLI)
-4. writes `~/.devopen/config.json` (fresh token included, mode 600)
-5. with `--with-server`: also installs `/usr/local/bin/devopen-server` +
-   `~/Library/LaunchAgents/com.nick.devopen.plist` (per-user agent —
-   `KeepAlive` + `RunAtLoad`)
-6. ensures the `devcontainer` CLI is present; with the server, verifies
-   `/health`
+2. installs `/usr/local/bin/devopen` (CLI — pure stdlib, no venv needed)
+3. writes `~/.devopen/config.json` (mode 600)
+4. ensures the `devcontainer` CLI is present
 
 ## Uninstallation
 
@@ -61,9 +49,9 @@ The installer:
 curl -fsSL https://raw.githubusercontent.com/nickbrett1/devopen/main/uninstall.py | python3
 ```
 
-Unloads the agent, removes the scripts and `~/.devopen`. Your `~/DevOpen`
-workspaces are left untouched (they're your data) — remove with
-`rm -rf ~/DevOpen` if you want them gone too.
+Removes the script and `~/.devopen`. Your `~/DevOpen` workspaces are left
+untouched (they're your data) — remove with `rm -rf ~/DevOpen` if you want
+them gone too.
 
 ## Usage
 
@@ -106,7 +94,7 @@ so the list is easy to scan.
 
 Some devcontainers join your tailnet (e.g. genproj projects with a
 `scripts/cloud_login.sh`). When you open a repo whose container has tailscale
-but isn't registered yet, devopen **asks** you after the window opens:
+but isn't registered yet, devopen **asks** you:
 
 ```
 [devopen] tailscale: container has tailscale but is not registered.
@@ -139,7 +127,16 @@ devopen --tailscale --authkey tskey-... parquet-peek   # non-interactive registr
   SSH host-key restore/backup (stable keys via the tailscale volume) and makes
   sure `sshd` is up, then prints the connection command:
   `[devopen] mosh-ready: mosh node@100.x.x.x (ssh node@100.x.x.x)`.
-  Note: closing the VS Code window stops the container (Dev Containers
+- **Blink host one-tap:** devopen also prints a `blink://host/?…` deep link
+  using the container's MagicDNS name (the `--hostname` you registered it
+  under), so you can add it to Blink Shell on your iPhone without typing:
+  ```
+  [devopen] blink-host: blink://host/?host=parquet-peek&username=root&port=22
+  ```
+  Copy the link and open it somewhere iOS routes into Blink (Safari / Notes) —
+  Blink adds the host. Omit `--blink-key` to use Blink's default key; set
+  `"blink_key"` in `~/.devopen/config.json` to pin a named key instead.
+- Note: closing the VS Code window stops the container (Dev Containers
   shutdown behavior) — keep the window open (or restart the container) when
   you want to mosh in from away.
 
@@ -155,8 +152,8 @@ devopen checks for an existing container for the workspace before building:
   keys brought back up
 
 The prompt only appears on an interactive terminal — over plain `ssh` (no
-`-t`), from scripts, or via the HTTP server it silently reuses, so the
-phone/automation flow is never blocked. Use `-t` when you want the prompt:
+`-t`), or from scripts it silently reuses, so the phone/automation flow is
+never blocked. Use `-t` when you want the prompt:
 
 ```bash
 ssh -t mac-studio devopen nickbrett1/parquet-peek   # asks: rebuild? [y/N]
@@ -173,9 +170,9 @@ devopen used to hard-fail. Now it:
   commits on top of origin via `git pull --rebase --autostash` (uncommitted
   changes survive too). If the rebase conflicts, it aborts safely and
   continues with your local state.
-- **non-interactive** (plain `ssh`, scripts, HTTP server) → never rewrites
-  history silently: it warns and opens the container with your local state.
-  Run `git pull --rebase` in the workspace when you want to sync.
+- **non-interactive** (plain `ssh`, scripts) → never rewrites history
+  silently: it warns and opens the container with your local state. Run
+  `git pull --rebase` in the workspace when you want to sync.
 
 Reuse is fast and keeps the tailscale registration and SSH host keys (they live
 in the workspace's volumes). A rebuild recreates the container from the
@@ -224,75 +221,26 @@ all your GitHub repos (needs a TTY, so use `-t`):
 ssh -t mac-studio devopen
 ```
 
-Or fire-and-forget the HTTP API (log streams to the terminal):
-
-```bash
-curl -s -X POST http://mac-studio:8797/open \
-     -H "Authorization: Bearer <token>" \
-     -d '{"repo": "nickbrett1/agy-telemetry"}'
-```
-
-The `owner/repo` shorthand works everywhere — CLI, picker, and the HTTP API.
-
-### HTTP API (requires the optional `--with-server` install)
-
-```bash
-curl -X POST http://mac-studio:8797/open \
-     -H "Authorization: Bearer <token>" \
-     -d '{"repo": "https://github.com/you/your-repo.git", "branch": "optional"}'
-```
-
-Streams the full build log; ends with `[devopen] SUCCESS <uri>` or
-`[devopen] FAILED: <reason>`.
-
-- `POST /open` — JSON body `{"repo", "branch?"}` + `Authorization: Bearer <token>`
-- `GET /open?token=<token>&repo=<url>&branch=<optional>` — one-tap from Safari / a Home Screen shortcut; logs render in the browser
-- `GET /health` — liveness
-
-Only one open runs at a time — a concurrent request gets `409`. Wrong/missing
-token gets `401`.
-
-### iPhone (Blink — works with CLI-only install)
-
-```bash
-ssh mac-studio devopen              # pick from workspaces + all your GitHub repos
-ssh mac-studio devopen nickbrett1/your-repo
-```
-
-### iPhone one-tap (requires the optional `--with-server` install)
-
-- **iOS Shortcut — share sheet (recommended, no repo typing)**: the shortcut
-  starts with *Receive [URLs] from Share Sheet*, then *Get Contents of URL* →
-  `POST http://mac-studio:8797/open`, headers `Authorization: Bearer <token>`,
-  body JSON `{"repo": "{{Shortcut Input}}"}`. Open a repo on GitHub in Safari →
-  Share → the shortcut. Or use *Ask for Input* + the same request for a
-  Home Screen icon that prompts for a URL.
-- **Safari bookmark**: `http://mac-studio:8797/open?token=<token>&repo=<url>`
-- **Blink**: `curl -s -X POST http://mac-studio:8797/open -H "Authorization: Bearer <token>" -d '{"repo":"nickbrett1/your-repo"}'`
-
 ## Configuration
 
 `~/.devopen/config.json`:
 
 ```json
 {
-  "token": "<hex>",
   "install_dir": "/Users/<you>/DevOpen/devopen",
   "workspaces_dir": "/Users/<you>/DevOpen/workspaces",
-  "host": "0.0.0.0",
-  "port": 8797
+  "github_username": "nickbrett1",
+  "blink_key": "",
+  "tailscale_authkey": ""
 }
 ```
 
 - `DEVOPEN_HOME` env var overrides the `~/DevOpen` default at install time (so
   the installer works for other users/machines too).
-- Bind to the tailnet IP only (instead of `0.0.0.0`) by editing `host` — e.g.
-  `100.x.y.z` from `tailscale ip -4`.
+- `DEVOPEN_WORKSPACES` overrides the workspaces dir at install time.
 
 ## Gotchas
 
-- **Port is 8797, not 8787** — VS Code's own Code Helper process listens on
-  8787 (and 8788), so devopen uses 8797 to avoid the clash.
 - **`docker: command not found` inside VS Code after opening?** The container
   is fine (devopen built it with docker). The usual cause is VS Code.app
   launched from the GUI getting a minimal PATH that omits `/usr/local/bin` —
@@ -306,14 +254,11 @@ ssh mac-studio devopen nickbrett1/your-repo
   (`dev-container+<hex-json of {hostPath, settings, configFile}>/<in-container
   workspaceFolder>`) — the same format VS Code stores for bind-mounted
   workspaces, which resolves cleanly.
-- **LaunchAgent, not LaunchDaemon** — the service must run in your GUI session
-  so `code` can open a window on the display.
 - Docker Desktop must be installed; devopen launches it and waits if it's not
   running.
 - `--remove-existing-container` = fresh container each time (matches the
   "new clone" habit); images are reused when unchanged.
-- First build per repo takes minutes — the HTTP stream stays open for the whole
-  build (set a generous timeout on your client).
+- First build per repo takes minutes.
 - Tailscale: the node name here is `mac-studio`; enable *Allow incoming
   connections* in the Tailscale macOS app.
 
@@ -321,17 +266,14 @@ ssh mac-studio devopen nickbrett1/your-repo
 
 ```
 devopen/
-├── install.py / uninstall.py   # agy-telemetry-style installers (curl | python3)
+├── install.py / uninstall.py   # curl | python3 installers
 ├── devopen/
 │   ├── opener.py               # core: docker → devcontainer CLI → clone → up → open
-│   ├── server.py               # FastAPI app
 │   ├── config.py               # ~/.devopen/config.json handling
 │   ├── repos.py                # GitHub repo listing (keychain PAT → API, via curl)
 │   └── __main__.py             # CLI (`python3 -m devopen`) + interactive picker
-├── scripts/
-│   ├── devopen                 # → /usr/local/bin/devopen
-│   └── devopen-server          # → /usr/local/bin/devopen-server (launchd wrapper)
-└── com.nick.devopen.plist      # LaunchAgent template (__HOME__ substituted)
+└── scripts/
+    └── devopen                 # → /usr/local/bin/devopen
 ```
 
 ## Ideas
@@ -339,4 +281,3 @@ devopen/
 - Have **genproj call devopen** after scaffolding a project — full end-to-end
   bootstrap with zero taps.
 - `code-server` / `vscode tunnel` variant for a browser-based editor.
-- SSE log streaming + a small status page for in-flight builds.

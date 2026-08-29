@@ -134,6 +134,11 @@ def main(argv=None):
         help="Tailscale hostname (default: repo name)",
     )
     parser.add_argument(
+        "--blink-key", default=None,
+        help="Name of the SSH key in Blink Shell for this host, so devopen prints a "
+             "blink://host deep link (default: DEVOPEN_BLINK_KEY env or config 'blink_key')",
+    )
+    parser.add_argument(
         "--fresh", action="store_true",
         help="Force a fresh container: remove + rebuild instead of reusing an existing one (no prompt)",
     )
@@ -154,11 +159,13 @@ def main(argv=None):
 
     cfg = config.load()
     authkey = args.authkey or os.environ.get("DEVOPEN_TAILSCALE_AUTHKEY") or cfg.get("tailscale_authkey")
+    blink_key = args.blink_key or os.environ.get("DEVOPEN_BLINK_KEY") or cfg.get("blink_key")
     try:
         open_repo(
             repo, branch=args.branch, workspaces_dir=workspaces_dir,
             tailscale=args.tailscale, tailscale_authkey=authkey,
-            tailscale_hostname=args.hostname, fresh=args.fresh, clean=args.clean,
+            tailscale_hostname=args.hostname, blink_key=blink_key,
+            fresh=args.fresh, clean=args.clean,
         )
         return 0
     except DevopenError as e:

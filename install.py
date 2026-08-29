@@ -8,6 +8,7 @@ Overrides (env): DEVOPEN_HOME (default ~/DevOpen), DEVOPEN_WORKSPACES,
 DEVOPEN_SKIP_UPDATE=1 (skip git pull of an existing checkout).
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -66,7 +67,6 @@ def main():
 
     # 3. Config
     print("\n[3/4] Writing config…")
-    import json
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
     cfg = {}
     if os.path.exists(config_path):

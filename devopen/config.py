@@ -7,7 +7,9 @@ Config lives at ~/.devopen/config.json (mode 600):
       "install_dir":    "~/DevOpen/devopen",
       "workspaces_dir": "~/DevOpen/workspaces",
       "host":           "0.0.0.0",
-      "port":           8797
+      "port":           8797,
+      "blink_key":      "<name>",          # SSH key in Blink Shell (optional)
+      "tailscale_authkey": "<hex>",        # optional, non-interactive registration
     }
 """
 
@@ -41,6 +43,8 @@ def _defaults(home=None):
         "port": DEFAULT_PORT,
         "token": "",
         "github_username": "nickbrett1",
+        "blink_key": "",
+        "tailscale_authkey": "",
     }
 
 

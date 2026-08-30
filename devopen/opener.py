@@ -554,17 +554,17 @@ def _tailnet_ip(container_id):
 
 
 def _remote_user(local_folder):
-    """remoteUser from the repo's devcontainer config (default 'root')."""
+    """remoteUser from the repo's devcontainer config (default 'vscode')."""
     import json as _json
     for path in (os.path.join(local_folder, ".devcontainer", "devcontainer.json"),
                  os.path.join(local_folder, ".devcontainer.json")):
         if os.path.isfile(path):
             try:
                 with open(path, encoding="utf-8") as f:
-                    return _json.load(f).get("remoteUser") or "root"
+                    return _json.load(f).get("remoteUser") or "vscode"
             except (OSError, ValueError):
                 break
-    return "root"
+    return "vscode"
 
 
 def blink_url(host, username, key=None, port=22):

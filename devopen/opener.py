@@ -361,14 +361,30 @@ def _container_workspace_path(container_id, local_folder):
     return f"/workspaces/{fallback_name}"
 
 
-def _find_existing_container(local_folder):
+def _find_existing_container(local_folder, repo_url=None):
     """Full id of the newest existing container for this workspace folder
     (created by devopen or the Dev Containers extension), or None.
 
-    Matches by the devcontainer.local_folder label first, then falls back to
-    any container whose bind-mount source equals local_folder (covers label /
-    path mismatches, e.g. resolved symlinks), so a running container is
-    reliably found before a rebuild."""
+    Matches in order:
+      1. the devcontainer.local_folder label (devopen / devcontainer CLI),
+      2. a container whose bind-mount source equals local_folder (covers
+         label/path mismatches, e.g. resolved symlinks),
+      3. a VS Code-extension-created container via its vsch.local.repository /
+         vsch.local.repository.folder labels. The extension stores the
+         workspace in a NAMED VOLUME and does NOT set devcontainer.local_folder,
+         so the first two checks miss it — without this, devopen builds a fresh
+         container alongside the running one and never closes the old one.
+    So a running container is reliably found before a rebuild."""
+    base = os.path.basename(local_folder.rstrip("/")) if local_folder else ""
+    norm_repo = None
+    if repo_url:
+        norm_repo = repo_url
+        for suf in (".git", "/"):
+            if norm_repo.endswith(suf):
+                norm_repo = norm_repo[: -len(suf)]
+                break
+        norm_repo = norm_repo.rstrip("/")
+
     def by_label():
         r = subprocess.run(
             ["docker", "ps", "-aq", "--filter", f"label=devcontainer.local_folder={local_folder}"],
@@ -377,13 +393,31 @@ def _find_existing_container(local_folder):
         lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
         return lines[0] if lines else None  # docker ps -a lists newest first
 
+    def by_vsch(cid):
+        # VS Code extension labels: vsch.local.repository=https://github.com/<owner>/<repo>.git/tree/<branch>,
+        # vsch.local.repository.folder=<repo>. Match on the repo URL when we have it,
+        # else fall back to the folder basename.
+        try:
+            r = subprocess.run(
+                ["docker", "inspect", "-f", "{{json .Config.Labels}}", cid],
+                capture_output=True, text=True, timeout=15,
+            )
+            labels = json.loads(r.stdout or "{}")
+        except Exception:
+            return False
+        repo = labels.get("vsch.local.repository", "") or ""
+        folder = labels.get("vsch.local.repository.folder", "") or ""
+        if norm_repo:
+            return norm_repo in repo
+        return bool(folder) and folder == base
+
     try:
         hit = by_label()
         if hit:
             return hit
     except Exception:
         pass
-    # Fallback: a container whose bind-mount source is this workspace folder.
+    # Fallback: bind-mount source, then VS Code-extension labels.
     try:
         r = subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True, timeout=15)
         for cid in r.stdout.split():
@@ -396,6 +430,8 @@ def _find_existing_container(local_folder):
                     return cid
             except Exception:
                 continue
+            if by_vsch(cid):
+                return cid
     except Exception:
         pass
     return None
@@ -744,7 +780,7 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     # to rebuild (interactive only; default N = reuse) unless --fresh was passed,
     # then start/reuse it instead of rebuilding (fast reopen, keeps tailscale
     # state + host keys).
-    existing = _find_existing_container(folder)
+    existing = _find_existing_container(folder, repo_url)
     # Reuse only when NOT forcing a rebuild (--fresh/--clean) and the user
     # doesn't opt into a rebuild on an interactive terminal. Otherwise we
     # rebuild — stopping + removing any existing container first so the
@@ -802,4 +838,5 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     uri = open_in_vscode(container_id, folder, on_log=on_log)
     on_log("Done.")
     return uri
+
 

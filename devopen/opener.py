@@ -541,17 +541,23 @@ def _prompt_tailscale():
 
 
 def _prompt_rebuild(container_id):
-    """Ask whether to rebuild an existing container (only on interactive
-    stdin). Default is N — reuse — so scripted/ssh-without-tty runs are
-    never blocked; --fresh still forces a rebuild with no prompt. A rebuild
-    recreates the container from the Dockerfile; the bind-mounted workspace
-    and named volumes survive, so tailscale registration + SSH host keys
-    persist.
+    """Ask whether to shut down + replace an existing container (rebuild).
+
+    Shown only on an interactive terminal (sys.stdin is a tty). Default is N
+    — reuse — so scripted / ssh-without-tty runs are never blocked; --fresh
+    forces a rebuild with no prompt. A rebuild recreates the container from
+    the Dockerfile; the bind-mounted workspace and named volumes survive, so
+    tailscale registration + SSH host keys persist. If you run devopen as a
+    plain `ssh host devopen <repo>` (no -t) the prompt won't show and the
+    running container is reused — use `ssh -t` (or --fresh) to rebuild.
     """
     try:
         if not sys.stdin.isatty():
             return False
-        answer = input(f"[devopen] existing container {container_id[:12]} found — rebuild it? [y/N] ").strip().lower()
+        answer = input(
+            f"[devopen] a container ({container_id[:12]}) already exists for this project. "
+            "Shut it down and replace it (rebuild)? [y/N] "
+        ).strip().lower()
         return answer in ("y", "yes")
     except (EOFError, KeyboardInterrupt):
         print()
@@ -746,6 +752,7 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     if existing and not (fresh or clean) and not _prompt_rebuild(existing):
         if _container_running(existing):
             on_log(f"[devopen] reusing running container {existing[:12]} (no rebuild).")
+            on_log("[devopen] to shut it down and rebuild, run: devopen --fresh <repo>  (or `ssh -t` to be asked)")
         else:
             on_log(f"[devopen] existing container {existing[:12]} is stopped — starting it.")
             subprocess.run(["docker", "start", existing], capture_output=True, text=True, timeout=60)
@@ -795,3 +802,4 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     uri = open_in_vscode(container_id, folder, on_log=on_log)
     on_log("Done.")
     return uri
+

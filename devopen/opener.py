@@ -361,9 +361,12 @@ def _container_workspace_path(container_id, local_folder):
     return f"/workspaces/{fallback_name}"
 
 
-def _find_existing_container(local_folder, repo_url=None):
-    """Full id of the newest existing container for this workspace folder
-    (created by devopen or the Dev Containers extension), or None.
+def _find_existing_containers(local_folder, repo_url=None):
+    """Ids of every existing container for this workspace folder (created by
+    devopen / the devcontainer CLI / the Dev Containers extension), newest
+    first. Multiple can match at once — e.g. a devopen-created container AND
+    an older VS Code-extension-created one — so a rebuild must close ALL of
+    them, not just the newest.
 
     Matches in order:
       1. the devcontainer.local_folder label (devopen / devcontainer CLI),
@@ -372,9 +375,7 @@ def _find_existing_container(local_folder, repo_url=None):
       3. a VS Code-extension-created container via its vsch.local.repository /
          vsch.local.repository.folder labels. The extension stores the
          workspace in a NAMED VOLUME and does NOT set devcontainer.local_folder,
-         so the first two checks miss it — without this, devopen builds a fresh
-         container alongside the running one and never closes the old one.
-    So a running container is reliably found before a rebuild."""
+         so the first two checks miss it."""
     base = os.path.basename(local_folder.rstrip("/")) if local_folder else ""
     norm_repo = None
     if repo_url:
@@ -384,14 +385,6 @@ def _find_existing_container(local_folder, repo_url=None):
                 norm_repo = norm_repo[: -len(suf)]
                 break
         norm_repo = norm_repo.rstrip("/")
-
-    def by_label():
-        r = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", f"label=devcontainer.local_folder={local_folder}"],
-            capture_output=True, text=True, timeout=15,
-        )
-        lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
-        return lines[0] if lines else None  # docker ps -a lists newest first
 
     def by_vsch(cid):
         # VS Code extension labels: vsch.local.repository=https://github.com/<owner>/<repo>.git/tree/<branch>,
@@ -411,30 +404,52 @@ def _find_existing_container(local_folder, repo_url=None):
             return norm_repo in repo
         return bool(folder) and folder == base
 
+    found = []
+
+    def add(cid):
+        if cid and cid not in found:
+            found.append(cid)
+
     try:
-        hit = by_label()
-        if hit:
-            return hit
+        r = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", f"label=devcontainer.local_folder={local_folder}"],
+            capture_output=True, text=True, timeout=15,
+        )
+        for cid in r.stdout.split():
+            add(cid)
     except Exception:
         pass
-    # Fallback: bind-mount source, then VS Code-extension labels.
+
     try:
         r = subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True, timeout=15)
         for cid in r.stdout.split():
+            if cid in found:
+                continue
             try:
                 out = subprocess.run(
                     ["docker", "inspect", "-f", "{{range .Mounts}}{{.Source}}{{end}}", cid],
                     capture_output=True, text=True, timeout=15,
                 )
                 if local_folder in (out.stdout or ""):
-                    return cid
+                    add(cid)
+                    continue
             except Exception:
-                continue
+                pass
             if by_vsch(cid):
-                return cid
+                add(cid)
     except Exception:
         pass
-    return None
+
+    # docker ps -a lists newest first, so preserve that ordering.
+    return found
+
+
+def _find_existing_container(local_folder, repo_url=None):
+    """Full id of the newest existing container for this workspace folder, or
+    None. Thin wrapper over _find_existing_containers for the reuse decision;
+    a rebuild closes ALL of them."""
+    containers = _find_existing_containers(local_folder, repo_url)
+    return containers[0] if containers else None
 
 
 def _container_running(container_id):
@@ -780,11 +795,13 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     # to rebuild (interactive only; default N = reuse) unless --fresh was passed,
     # then start/reuse it instead of rebuilding (fast reopen, keeps tailscale
     # state + host keys).
-    existing = _find_existing_container(folder, repo_url)
+    existing_containers = _find_existing_containers(folder, repo_url)
+    existing = existing_containers[0] if existing_containers else None
     # Reuse only when NOT forcing a rebuild (--fresh/--clean) and the user
     # doesn't opt into a rebuild on an interactive terminal. Otherwise we
-    # rebuild — stopping + removing any existing container first so the
-    # freshly-built one doesn't conflict with an open one (ports/name/sessions).
+    # rebuild — stopping + removing ANY existing container for this workspace
+    # (devopen- and/or VS Code-extension-created) first so the freshly-built
+    # one doesn't conflict with an open one (ports/name/sessions).
     if existing and not (fresh or clean) and not _prompt_rebuild(existing):
         if _container_running(existing):
             on_log(f"[devopen] reusing running container {existing[:12]} (no rebuild).")
@@ -794,9 +811,10 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
             subprocess.run(["docker", "start", existing], capture_output=True, text=True, timeout=60)
         container_id = existing
     else:
-        if existing:
-            on_log(f"[devopen] rebuilding container for {folder}…")
-            _stop_and_remove_container(existing, on_log=on_log)
+        if existing_containers:
+            on_log(f"[devopen] rebuilding container for {folder} — closing {len(existing_containers)} existing container(s)…")
+            for cid in existing_containers:
+                _stop_and_remove_container(cid, on_log=on_log)
         if clean:
             on_log("[devopen] clean rebuild: building image with --no-cache (Docker layer cache skipped).")
         on_log(f"Running devcontainer up on {folder} (first build can take minutes)…")

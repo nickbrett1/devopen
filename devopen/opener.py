@@ -363,17 +363,42 @@ def _container_workspace_path(container_id, local_folder):
 
 def _find_existing_container(local_folder):
     """Full id of the newest existing container for this workspace folder
-    (created by devopen or the Dev Containers extension, which both label
-    containers with devcontainer.local_folder), or None."""
-    try:
+    (created by devopen or the Dev Containers extension), or None.
+
+    Matches by the devcontainer.local_folder label first, then falls back to
+    any container whose bind-mount source equals local_folder (covers label /
+    path mismatches, e.g. resolved symlinks), so a running container is
+    reliably found before a rebuild."""
+    def by_label():
         r = subprocess.run(
             ["docker", "ps", "-aq", "--filter", f"label=devcontainer.local_folder={local_folder}"],
             capture_output=True, text=True, timeout=15,
         )
         lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
         return lines[0] if lines else None  # docker ps -a lists newest first
+
+    try:
+        hit = by_label()
+        if hit:
+            return hit
     except Exception:
-        return None
+        pass
+    # Fallback: a container whose bind-mount source is this workspace folder.
+    try:
+        r = subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True, timeout=15)
+        for cid in r.stdout.split():
+            try:
+                out = subprocess.run(
+                    ["docker", "inspect", "-f", "{{range .Mounts}}{{.Source}}{{end}}", cid],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if local_folder in (out.stdout or ""):
+                    return cid
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
 
 
 def _container_running(container_id):
@@ -385,6 +410,33 @@ def _container_running(container_id):
         return r.stdout.strip() == "true"
     except Exception:
         return False
+
+
+def _stop_and_remove_container(container_id, on_log=log_stdout):
+    """Cleanly stop + remove an existing container before a rebuild.
+
+    A running container can hold the workspace's forwarded ports, named
+    volumes, or stale ssh/tailscale sessions, so a rebuild while it is open
+    can fail (devcontainer up --remove-existing-container removes it late and
+    the freshly-built container then conflicts on ports/name). Stop + remove
+    it first — this "closes" the old container before the new one opens. The
+    bind-mounted workspace and named volumes survive a container removal."""
+    if not container_id:
+        return
+    try:
+        if _container_running(container_id):
+            on_log(f"[devopen] stopping existing container {container_id[:12]}…")
+            subprocess.run(
+                ["docker", "stop", "-t", "10", container_id],
+                capture_output=True, text=True, timeout=60,
+            )
+        on_log(f"[devopen] removing existing container {container_id[:12]}…")
+        subprocess.run(
+            ["docker", "rm", container_id],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:
+        on_log(f"[devopen] could not stop/remove existing container {container_id[:12]}: {e}")
 
 
 def _docker_context_name():
@@ -686,8 +738,12 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     # to rebuild (interactive only; default N = reuse) unless --fresh was passed,
     # then start/reuse it instead of rebuilding (fast reopen, keeps tailscale
     # state + host keys).
-    existing = None if (fresh or clean) else _find_existing_container(folder)
-    if existing and not _prompt_rebuild(existing):
+    existing = _find_existing_container(folder)
+    # Reuse only when NOT forcing a rebuild (--fresh/--clean) and the user
+    # doesn't opt into a rebuild on an interactive terminal. Otherwise we
+    # rebuild — stopping + removing any existing container first so the
+    # freshly-built one doesn't conflict with an open one (ports/name/sessions).
+    if existing and not (fresh or clean) and not _prompt_rebuild(existing):
         if _container_running(existing):
             on_log(f"[devopen] reusing running container {existing[:12]} (no rebuild).")
         else:
@@ -697,6 +753,7 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
     else:
         if existing:
             on_log(f"[devopen] rebuilding container for {folder}…")
+            _stop_and_remove_container(existing, on_log=on_log)
         if clean:
             on_log("[devopen] clean rebuild: building image with --no-cache (Docker layer cache skipped).")
         on_log(f"Running devcontainer up on {folder} (first build can take minutes)…")

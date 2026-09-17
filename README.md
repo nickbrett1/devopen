@@ -22,7 +22,8 @@ straight to work. It's a pure CLI — nothing listens on a port.
 ```
 
 - **Core logic** (`devopen/opener.py`): ensures Docker is running (auto-launches
-  Docker Desktop), ensures the `devcontainer` CLI (installs `@devcontainers/cli`
+  whichever container engine is installed — OrbStack or Docker Desktop), ensures
+  the `devcontainer` CLI (installs `@devcontainers/cli`
   via npm on first use), clones or updates the repo, runs `devcontainer up`,
   and opens the VS Code window.
 - **Repo picker** (`devopen/repos.py` + CLI): lists already-cloned workspaces,
@@ -254,8 +255,9 @@ ssh -t mac-studio devopen
   (`dev-container+<hex-json of {hostPath, settings, configFile}>/<in-container
   workspaceFolder>`) — the same format VS Code stores for bind-mounted
   workspaces, which resolves cleanly.
-- Docker Desktop must be installed; devopen launches it and waits if it's not
-  running.
+- Docker Desktop **or** OrbStack must be installed; devopen detects which one
+  and launches it (plus `orbctl start`) if the engine isn't running. OrbStack is
+  the engine on this machine, so `open -a Docker` is never assumed.
 - `--remove-existing-container` = fresh container each time (matches the
   "new clone" habit); images are reused when unchanged.
 - First build per repo takes minutes.

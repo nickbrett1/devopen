@@ -44,21 +44,92 @@ def docker_ready():
         return False
 
 
+# macOS engine bundles, in preference order. Detection is by app bundle or a
+# vendor-specific CLI — never by the `docker` shim, which every engine installs
+# at the same path (/usr/local/bin/docker), so it cannot tell them apart.
+_ORBSTACK = ("OrbStack", "OrbStack.app", "orbctl")
+_DOCKER_DESKTOP = ("Docker Desktop", "Docker.app", None)
+
+
+def _app_path(bundle):
+    """Locate an .app bundle in the usual macOS locations, or return None."""
+    for root in ("/Applications", os.path.expanduser("~/Applications")):
+        path = os.path.join(root, bundle)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _macos_engine():
+    """Work out which container engine is installed on this Mac.
+
+    Returns (label, app_path_or_None, cli_or_None), or None if neither OrbStack
+    nor Docker Desktop is present. Hard-coding an engine is what made devopen
+    run `open -a Docker` on a machine that only has OrbStack, so probe instead.
+    """
+    for label, bundle, cli in (_ORBSTACK, _DOCKER_DESKTOP):
+        app = _app_path(bundle)
+        found_cli = shutil.which(cli) if cli else None
+        if app or found_cli:
+            return label, app, found_cli
+    return None
+
+
+def _start_engine(label, app, cli, on_log):
+    """Best-effort launch of a stopped macOS container engine."""
+    if app:
+        on_log(f"$ open {app}")
+        # `open <bundle>` is the reliable form; `open -a <name>` needs the
+        # bundle registered with LaunchServices at that exact name.
+        r = subprocess.run(["open", app], capture_output=True, text=True)
+        if r.returncode != 0:
+            on_log((r.stderr or "").strip() or f"open exited {r.returncode}")
+    elif shutil.which("open"):
+        on_log(f"$ open -a {label}")
+        subprocess.run(["open", "-a", label], capture_output=True, text=True)
+    if cli:
+        # `open` only raises the GUI. OrbStack leaves the engine stopped after a
+        # VM kernel panic and does not restart it by itself, so drive the CLI
+        # too — it is idempotent when the engine is already up.
+        on_log(f"$ {cli} start")
+        r = subprocess.run([cli, "start"], capture_output=True, text=True)
+        for line in (r.stdout or "").splitlines():
+            on_log(line)
+        if r.returncode != 0:
+            on_log((r.stderr or "").strip() or f"{cli} start exited {r.returncode}")
+
+
 def ensure_docker(on_log=log_stdout, timeout=180):
-    """Make sure Docker is running, auto-launching Docker Desktop on macOS."""
+    """Make sure Docker is running, auto-launching the container engine."""
     if docker_ready():
         return
-    if shutil.which("open") is None:
+    if sys.platform == "darwin":
+        engine = _macos_engine()
+        if engine is None:
+            raise DevopenError(
+                "Docker is not running and no container engine (OrbStack or Docker "
+                "Desktop) was found in /Applications or ~/Applications."
+            )
+        label = engine[0]
+        on_log(f"Docker not running — starting {label}…")
+        _start_engine(*engine, on_log)
+    elif shutil.which("systemctl"):
+        on_log("Docker not running — starting the docker service…")
+        r = subprocess.run(["systemctl", "start", "docker"], capture_output=True, text=True)
+        if r.returncode != 0:
+            on_log((r.stderr or "").strip() or "systemctl start docker failed")
+    else:
         raise DevopenError("Docker is not running (and cannot be auto-launched on this OS).")
-    on_log("Docker not running — launching Docker Desktop…")
-    subprocess.run(["open", "-a", "Docker"], check=True)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if docker_ready():
             on_log("Docker is ready.")
             return
         time.sleep(3)
-    raise DevopenError(f"Docker did not become ready within {timeout}s. Is Docker Desktop installed?")
+    raise DevopenError(
+        f"Docker did not become ready within {timeout}s. Is the container engine "
+        "installed and healthy? (Try `orbctl status` or `docker info`.)"
+    )
 
 
 def ensure_devcontainer_cli(on_log=log_stdout):

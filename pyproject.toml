@@ -1,0 +1,21 @@
+[project]
+name = "devopen"
+version = "0.1.0"
+description = "Open any of your devcontainer projects in VS Code from a terminal or from your phone"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = []
+
+# This pyproject exists so other projects can depend on devopen as a library
+# (devdash imports opener.open_repo and the container/URI helpers). The CLI is
+# still installed by install.py, which clones the repo and drops a
+# /usr/local/bin/devopen shim on PYTHONPATH — no console_scripts here, so a
+# `pip install` can never shadow or clobber that shim.
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["devopen"]

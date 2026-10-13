@@ -447,15 +447,30 @@ def _find_existing_containers(local_folder, repo_url=None):
          vsch.local.repository.folder labels. The extension stores the
          workspace in a NAMED VOLUME and does NOT set devcontainer.local_folder,
          so the first two checks miss it."""
+    def _norm_repo_url(url):
+        """A repo URL reduced to comparable form: no /tree/<branch>, no .git,
+        no trailing slash."""
+        url = (url or "").strip().split("/tree/")[0]
+        if url.endswith(".git"):
+            url = url[:-4]
+        return url.rstrip("/")
+
+    def _same_path(a, b):
+        """True when two workspace paths denote the same directory.
+
+        Equality after normpath, then after realpath — so a symlinked workspace
+        still matches its resolved container mount — but a *sibling* whose name
+        merely shares a prefix (galactic-unicorn vs galactic-unicorn-remote)
+        does not. The old substring test matched both, which is how opening
+        galactic-unicorn silently reused galactic-unicorn-remote's container.
+        """
+        if not a or not b:
+            return False
+        a, b = os.path.normpath(a), os.path.normpath(b)
+        return a == b or os.path.realpath(a) == os.path.realpath(b)
+
     base = os.path.basename(local_folder.rstrip("/")) if local_folder else ""
-    norm_repo = None
-    if repo_url:
-        norm_repo = repo_url
-        for suf in (".git", "/"):
-            if norm_repo.endswith(suf):
-                norm_repo = norm_repo[: -len(suf)]
-                break
-        norm_repo = norm_repo.rstrip("/")
+    norm_repo = _norm_repo_url(repo_url) or None
 
     def by_vsch(cid):
         # VS Code extension labels: vsch.local.repository=https://github.com/<owner>/<repo>.git/tree/<branch>,
@@ -472,7 +487,9 @@ def _find_existing_containers(local_folder, repo_url=None):
         repo = labels.get("vsch.local.repository", "") or ""
         folder = labels.get("vsch.local.repository.folder", "") or ""
         if norm_repo:
-            return norm_repo in repo
+            # Exact repo match, not a prefix: galactic-unicorn must not match
+            # galactic-unicorn-remote's extension label either.
+            return _norm_repo_url(repo) == norm_repo
         return bool(folder) and folder == base
 
     found = []
@@ -498,10 +515,14 @@ def _find_existing_containers(local_folder, repo_url=None):
                 continue
             try:
                 out = subprocess.run(
-                    ["docker", "inspect", "-f", "{{range .Mounts}}{{.Source}}{{end}}", cid],
+                    ["docker", "inspect", "-f",
+                     '{{range .Mounts}}{{.Source}}{{"\\n"}}{{end}}', cid],
                     capture_output=True, text=True, timeout=15,
                 )
-                if local_folder in (out.stdout or ""):
+                # One source per line, compared whole: a substring test here is
+                # what let /…/galactic-unicorn match /…/galactic-unicorn-remote.
+                sources = [s for s in (out.stdout or "").splitlines() if s]
+                if any(_same_path(local_folder, s) for s in sources):
                     add(cid)
                     continue
             except Exception:

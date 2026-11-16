@@ -329,6 +329,37 @@ def _ff_pull_or_rebase(dest, on_log=log_stdout):
     return False
 
 
+def _fetch_remotes(dest, on_log=log_stdout):
+    """Fetch every remote, but never let one failure block the open.
+
+    `git fetch --all` stops at the first remote it cannot reach and — because
+    it ran through _run — aborted the whole open. A secondary remote with an
+    SSH host key that this non-interactive process cannot prompt to accept (or
+    an offline mirror) therefore made the workspace unopenable even though
+    origin had fetched fine. The pull that follows (_ff_pull_or_rebase) already
+    degrades to "continue with local state" when the network is unavailable, so
+    fetching does the same: log the failure and carry on.
+    """
+    listed = subprocess.run(["git", "-C", dest, "remote"], capture_output=True, text=True)
+    remotes = (listed.stdout or "").split()
+    failed = []
+    for remote in remotes:
+        cmd = ["git", "-C", dest, "fetch", "--prune", remote]
+        on_log("$ " + " ".join(cmd))
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        for line in (r.stdout or "").splitlines():
+            on_log(line)
+        for line in (r.stderr or "").splitlines():
+            on_log(line)
+        if r.returncode != 0:
+            failed.append(remote)
+            on_log(f"[devopen] warning: could not fetch remote '{remote}' "
+                   f"(exit {r.returncode}) — continuing.")
+    if failed:
+        on_log("[devopen] fetch incomplete for: " + ", ".join(failed) +
+               " — the pull below reports if the branch itself is behind.")
+
+
 def clone_or_update(workspaces_dir, repo_url, branch, on_log=log_stdout):
     """Clone the repo into workspaces_dir, or fetch/checkout if it exists."""
     os.makedirs(workspaces_dir, exist_ok=True)
@@ -342,7 +373,7 @@ def clone_or_update(workspaces_dir, repo_url, branch, on_log=log_stdout):
         _run(cmd, on_log=on_log)
     else:
         on_log(f"Workspace exists: {dest} — fetching latest…")
-        _run(["git", "-C", dest, "fetch", "--all", "--prune"], on_log=on_log)
+        _fetch_remotes(dest, on_log=on_log)
         if branch:
             _run(["git", "-C", dest, "checkout", branch], on_log=on_log)
         _ff_pull_or_rebase(dest, on_log=on_log)

@@ -772,6 +772,98 @@ echo "SSHD: $(pgrep -x sshd >/dev/null && echo running || echo NOT-running)"
         return False
 
 
+def _devcontainer_config(local_folder):
+    """The workspace's devcontainer config as a dict, or {}. Same two paths the
+    devcontainer CLI reads."""
+    for path in (os.path.join(local_folder, ".devcontainer", "devcontainer.json"),
+                 os.path.join(local_folder, ".devcontainer.json")):
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    cfg = json.load(f)
+            except (OSError, ValueError):
+                return {}
+            return cfg if isinstance(cfg, dict) else {}
+    return {}
+
+
+def _post_start_argv(config):
+    """`postStartCommand` as argv, or None.
+
+    The string form runs through a shell (it is one line of script in every
+    config we generate); the array form is already argv. Anything else means
+    "no command" — guessing would run the wrong thing in someone's container.
+    """
+    command = config.get("postStartCommand")
+    if isinstance(command, str) and command.strip():
+        return ["sh", "-lc", command]
+    if isinstance(command, list) and command and all(isinstance(a, str) for a in command):
+        return command
+    return None
+
+
+def _exec_root(container_id, script, timeout=30):
+    """stdout of a root `docker exec` of `sh -c script`, or '' on any failure."""
+    try:
+        r = subprocess.run(
+            ["docker", "exec", "-u", "root", container_id, "sh", "-c", script],
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
+        return (r.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def run_post_start(container_id, local_folder, on_log=log_stdout):
+    """Re-run the repo's postStartCommand after a plain `docker start`.
+
+    `docker start` does not run lifecycle commands, so a container devopen only
+    *started* (rather than built) has none of what postStart sets up: sshd,
+    socat, tailscaled, the container agent. That is why a reopened workspace
+    could not be ssh'd into even though the window attached. devdash re-runs the
+    same hook for the same reason.
+
+    Best-effort: a hook that fails, or is still running after the timeout, is a
+    warning — the workspace still opens. The hook is expected to be idempotent
+    (postStartCommand runs on every start by design).
+    """
+    config = _devcontainer_config(local_folder)
+    argv = _post_start_argv(config)
+    if not argv:
+        return False
+    user = config.get("remoteUser")
+    user = user if isinstance(user, str) and user else None
+    cmd = ["docker", "exec"]
+    if user:
+        cmd += ["-u", user]
+        home = _exec_root(container_id, f"getent passwd {user} 2>/dev/null | cut -d: -f6")
+        if not home and user != "root":
+            home = f"/home/{user}"
+        if home:
+            cmd += ["-e", f"HOME={home}"]
+    workdir = config.get("workspaceFolder")
+    if isinstance(workdir, str) and workdir:
+        cmd += ["-w", workdir]
+    cmd += [container_id] + argv
+    on_log("[devopen] container was only started — re-running postStartCommand…")
+    on_log("$ " + " ".join(cmd))
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
+    except subprocess.TimeoutExpired:
+        on_log("[devopen] warning: postStartCommand did not finish within 300s — continuing.")
+        return False
+    for line in (r.stdout or "").splitlines():
+        on_log(line)
+    for line in (r.stderr or "").splitlines():
+        on_log(line)
+    if r.returncode != 0:
+        on_log(f"[devopen] warning: postStartCommand exited {r.returncode} — continuing "
+               "(sshd/tailscale/the agent may not be up).")
+        return False
+    on_log("[devopen] postStartCommand complete.")
+    return True
+
+
 def _tailnet_ip(container_id):
     try:
         r = subprocess.run(
@@ -932,6 +1024,10 @@ def open_repo(repo_url, branch=None, workspaces_dir=None, on_log=log_stdout,
         else:
             on_log(f"[devopen] existing container {existing[:12]} is stopped — starting it.")
             subprocess.run(["docker", "start", existing], capture_output=True, text=True, timeout=60)
+            # `docker start` runs no lifecycle commands, so postStart (sshd,
+            # socat, tailscaled, the agent) has to be re-run or the container is
+            # half-up: the window attaches, but nothing can reach it.
+            run_post_start(existing, folder, on_log=on_log)
         container_id = existing
     else:
         if existing_containers:

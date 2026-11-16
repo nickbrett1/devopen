@@ -1,6 +1,6 @@
 [project]
 name = "devopen"
-version = "0.1.0"
+version = "0.1.5"
 description = "Open any of your devcontainer projects in VS Code from a terminal or from your phone"
 readme = "README.md"
 license = { text = "MIT" }
